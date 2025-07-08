@@ -1,0 +1,11 @@
+# Dependency directories
+/node_modules
+
+# Temporary files from our upload script
+/uploads
+
+# Log files
+*.log
+
+# Environment variables file
+.env
