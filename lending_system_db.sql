@@ -140,3 +140,24 @@ INSERT INTO prodi (nama_prodi, kepanjangan_prodi, tahun_angkatan) VALUES
 ('TL22B', 'Teknik Listrik 22B', '2022/2023'),
 ('TL22C', 'Teknik Listrik 22C', '2022/2023'),
 ('TL22D', 'Teknik Listrik 22D', '2022/2023');
+
+/*
+hasil output:
+
+[INFO] File uploaded: REKAP MAHASISWA D3 TEKNIK LISTRIK 2024-2025 Genap.xlsx, size: 18518 bytes
+[INFO] Auto-detected file type as: perColumn
+✅ Total students processed in backend: 272
+Database operation result: ResultSetHeader {
+  fieldCount: 0,
+  affectedRows: 272,
+  insertId: 0,
+  info: 'Records: 272  Duplicates: 0  Warnings: 0',
+  serverStatus: 2,
+  warningStatus: 0,
+  changedRows: 0
+}
+*/
+
+-- --- insert data untuk admin_users ---
+INSERT INTO admin_users (username, password_hash) 
+VALUES ('admin', '$2b$10$AIwKa3UeP9Ki5sKi4pQ4t.pwggYWl47k48LgscPYqAyG4IVsTsTiu');
