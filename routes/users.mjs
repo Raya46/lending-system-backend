@@ -23,6 +23,12 @@ function validateId(req, res, next) {
   next();
 }
 
+/*
+    dokumentasi: 
+    https://expressjs.com/en/api.html#req.signedCookies  
+    https://expressjs.com/en/api.html#req.cookies
+*/
+
 router.get("/", (req, res) => {
   console.log(req.headers.cookie);
   console.log(req.cookies);

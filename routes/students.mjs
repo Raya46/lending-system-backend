@@ -7,6 +7,7 @@ import {
   parsePerSheet,
   parsePerColumn,
 } from "../ultils/excelParser.mjs";
+import saveStudentsToDB from "../data/saveStudent.mjs";
 
 const router = express.Router();
 const upload = multer({ dest: "uploads/" });
@@ -15,13 +16,13 @@ const upload = multer({ dest: "uploads/" });
 /*
     Middleware Multer untuk menangani file upload dan error handingnya juga
     dokumentasi: https://expressjs.com/en/resources/middleware/multer.html
-*/
+*/  
 
 // Route untuk menangani upload file ke /api/students/upload
 router.post("/upload", (req, res) => {
   // Middleware untuk menangani file upload menggunakan multer
   const uploader = upload.single("studentFile");
-  uploader(req, res, function (err) {
+  uploader(req, res, async function (err) {
 
 
     // ===============================================================
@@ -35,15 +36,13 @@ router.post("/upload", (req, res) => {
         .status(500)
         .json({ message: "An unknown error occurred", error: err });
     }
-
+    if (!req.file) {
+      return res.status(400).send("No file uploaded.");
+    }
     // ===============================================================
     // ------------ SAMPAI SINI ---
     // ===============================================================
 
-    if (!req.file) {
-      return res.status(400).send("No file uploaded.");
-    }
-    //sampai sini error handlingnya
 
     // Hasil input programStudi dari the UI
     const { programStudi } = req.body;
@@ -96,11 +95,14 @@ router.post("/upload", (req, res) => {
         "✅ Total students processed in backend:",allStudents.length
       );
 
+      const dbResult = await saveStudentsToDB(allStudents);
+      
       res.status(200).json({
         message: "File parsed and students grouped successfully!",
         fileName: req.file.originalname,
         totalStudentsFound: allStudents.length,
         dataByClass: groupedStudents, // mengirim data tergroup terbaru
+        dbResult
       });
     } catch (error) {
       console.error("Error processing file:", error);

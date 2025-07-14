@@ -125,3 +125,18 @@ CREATE TABLE IF NOT EXISTS transaksi (
     FOREIGN KEY (admin_id_checkout) REFERENCES admin_users(admin_id) ON DELETE RESTRICT ON UPDATE CASCADE,
     FOREIGN KEY (admin_id_checkin) REFERENCES admin_users(admin_id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
+
+-- --- insert data untuk prodi ---
+INSERT INTO prodi (nama_prodi, kepanjangan_prodi, tahun_angkatan) VALUES
+('TL24A', 'Teknik Listrik 24A', '2024/2025'),
+('TL24B', 'Teknik Listrik 24B', '2024/2025'),
+('TL24C', 'Teknik Listrik 24C', '2024/2025'),
+('TL24D', 'Teknik Listrik 24D', '2024/2025'),
+('TL23A', 'Teknik Listrik 23A', '2023/2024'),
+('TL23B', 'Teknik Listrik 23B', '2023/2024'),
+('TL23C', 'Teknik Listrik 23C', '2023/2024'),
+('TL23D', 'Teknik Listrik 23D', '2023/2024'),
+('TL22A', 'Teknik Listrik 22A', '2022/2023'),
+('TL22B', 'Teknik Listrik 22B', '2022/2023'),
+('TL22C', 'Teknik Listrik 22C', '2022/2023'),
+('TL22D', 'Teknik Listrik 22D', '2022/2023');
