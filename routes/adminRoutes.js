@@ -10,4 +10,7 @@ router.get("/dashboard/low-stock-items", AdminController.getLowStockItems);
 router.get("/dashboard/inventory-data", AdminController.getInventoryData);
 router.get("/dashboard/inventory-summary", AdminController.getInventorySummary);
 
+router.get("/dashboard/class-overview", AdminController.getClassOverview);
+router.get("/dashboard/class-table", AdminController.getClassTable);
+
 export default router;

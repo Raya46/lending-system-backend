@@ -92,6 +92,38 @@ class AdminController {
       });
     }
   }
+
+  static async getClassOverview(req, res) {
+    try {
+      const classData = await AdminService.getClassOverview();
+      res.json({
+        success: true,
+        data: classData,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Gagal mengambil class data",
+        error: error.message,
+      });
+    }
+  }
+
+  static async getClassTable(req, res) {
+    try {
+      const classTableData = await AdminService.getClassesTable();
+      res.json({
+        success: true,
+        data: classTableData,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Gagal mengambil class table data",
+        error: error.message,
+      });
+    }
+  }
 }
 
 export default AdminController;
