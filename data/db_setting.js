@@ -9,7 +9,7 @@ const pool = mysql.createPool({
     host: 'localhost',
     user: 'root',
     password: '',
-    database: 'lab_komputer',
+    database: 'lending_system_db',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
