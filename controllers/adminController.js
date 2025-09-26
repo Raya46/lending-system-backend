@@ -124,6 +124,46 @@ class AdminController {
       });
     }
   }
+
+  static async getMahasiswaByProgramStudy(req, res) {
+    try {
+      const { nama_prodi } = req.params;
+      const { limit = 10, offset = 0 } = req.query;
+      const results = await AdminService.getMahasiswaByProgramStudy(
+        nama_prodi,
+        parseInt(limit),
+        parseInt(offset)
+      );
+      res.json({
+        success: true,
+        data: results,
+      });
+    } catch (error) {
+      const statusCode = error.message.includes("tidak ditemukan") ? 404 : 500;
+      res.status(statusCode).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
+  static async updateMahasiswa(req, res) {
+    try {
+      const { nim } = req.params;
+      const mahasiswaData = req.body;
+      const result = await AdminService.updateMahasiswa(nim, mahasiswaData);
+      res.json({
+        success: true,
+        message: result.message,
+        data: result.data,
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
 }
 
 export default AdminController;

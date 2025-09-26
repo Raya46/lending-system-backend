@@ -42,83 +42,101 @@ class AdminService {
 
   static async getTopLendingItems() {
     const query = `
-    SELECT i.tipe_nama_barang as item_name,
-    COUNT(t.peminjaman_id) as lent_quantity,
-    CASE
-        WHEN i.status = "TERSEDIA" THEN 1
-        ELSE 0
-    END as remaining_quantity
-    FROM inventory i
-    LEFT JOIN transaksi t on i.id_barang = t.id_barang
-        AND t.status_peminjaman IN ('dipinjam')
-    GROUP BY i.id_barang, i.tipe_nama_barang, i.status
-    ORDER BY lent_quantity DESC
+    SELECT 
+      i.tipe_nama_barang as name,
+      COUNT(t.peminjaman_id) as lent_quantity,
+      i.id_barang
+    FROM transaksi t
+    JOIN inventory i ON t.id_barang = i.id_barang
+    WHERE t.status_peminjaman IN ('dipinjam','dikembalikan')
+    GROUP BY i.id_barang, i.tipe_nama_barang
+    ORDER BY lent_quantity DESC 
     LIMIT 10
     `;
 
     const [rows] = await pool.execute(query);
-    return rows;
+
+    const itemsWithRemaining = await Promise.all(
+      rows.map(async (item) => {
+        const [remainingQuery] = await pool.execute(
+          'SELECT COUNT(*) as remaining FROM inventory WHERE tipe_nama_barang = ? AND status = "tersedia"',
+          [item.name]
+        );
+        return {
+          name: item.name,
+          lentQuantity: item.lent_quantity,
+          remainingQuantity: remainingQuery[0].remaining || 0,
+        };
+      })
+    );
+    return itemsWithRemaining;
   }
 
   static async getLowStockItems() {
-    const LOW_STOCK = 15;
     const query = `
-    SELECT i.tipe_nama_barang as item_name,
-    CASE
-        WHEN i.status = 'TERSEDIA' THEN 1
-        ELSE 0
-    END as remaining_quantity,
-    'LOW' as status
-    FROM inventory i
-    WHERE i.status = 'TERSEDIA'
-    GROUP BY i.id_barang, i.tipe_nama_barang
-    HAVING remaining_quantity <= ?
+    SELECT 
+      tipe_nama_barang as name,
+      COUNT(*) as remaining_quantity,
+      status
+    FROM inventory
+    WHERE status = 'tersedia'
+    GROUP BY tipe_nama_barang, status
+    HAVING remaining_quantity <= 15
     ORDER BY remaining_quantity ASC
+    LIMIT 10
     `;
 
     const [rows] = await pool.execute(query);
-    return rows;
+    return rows.map((item) => ({
+      name: item.name,
+      remainingQuantity: item.remainingQuantity,
+      status: item.remaining_quantity <= 5 ? "Critical" : "Low",
+    }));
   }
 
   static async getInventorySummary() {
-    const queries = [
-      'SELECT COUNT(*) as quantity_in_hand FROM inventory WHERE status = "TERSEDIA" ',
-      'SELECT COUNT(*) as to_be_received FROM borrow_requests WHERE status = "disetujui" ',
-    ];
-
-    const results = await Promise.all(
-      queries.map((query) => pool.execute(query))
-    );
+    const [summary] = await pool.execute(`
+      SELECT 
+        COUNT(CASE WHEN status = 'tersedia' THEN 1 END) as quantity_in_hand,
+        COUNT(CASE WHEN status IN ('dipinjam','diperbaiki') THEN 1 END) as to_be_received
+      FROM inventory
+      `);
 
     return {
-      quantity_in_hand: results[0][0][0].quantity_in_hand,
-      to_be_received: results[1][0][0].to_be_received,
+      quantityInHand: summary[0].quantity_in_hand,
+      toBeReceived: summary[0].to_be_received,
     };
   }
 
   static async getInventoryData() {
     const query = `
-    SELECT i.tipe_nama_barang as item_name,
-    COUNT(t.peminjaman_id) as lent_quantity,
+    SELECT 
+      i.tipe_nama_barang as item,
+    COUNT(CASE WHEN t.status_peminjaman IN ('dipinjam','diperbaiki') THEN 1 END) as lent_quantity,
+    COUNT(CASE WHEN i.status = 'tersedia' THEN 1 END) as remaining_quantity,
+    COUNT(*) as total_quantity,
+    MAX(i.tanggal_pembelian) as latest_purchase_date,
     CASE
-        WHEN i.status = 'TERSEDIA' THEN 1
-        ELSE 0
-    END as remaining_quantity,
-    1 as total_quantity,
-    CASE
-        WHEN i.status = 'TERSEDIA' AND COUNT(t.peminjaman_id) >= 15 THEN 'in-stock'
-        WHEN i.status = 'TERSEDIA' AND COUNT(t.peminjaman_id) < 15 THEN 'low-stock'
-        ELSE 'out-of-stock'
-    END as availablity
+        WHEN COUNT(CASE WHEN i.status = 'tersedia' THEN 1 END) = 0 THEN 'Out of Stock'
+        WHEN COUNT(CASE WHEN i.status = 'tersedia' THEN 1 END) <= 15 THEN 'Low Stock'
+        ELSE 'In-stock'
+    END as availability
     FROM inventory i
     LEFT JOIN transaksi t ON i.id_barang = t.id_barang
-    AND t.status_peminjaman IN ('dipinjam')
-    GROUP BY i.id_barang, i.tipe_nama_barang, i.status
-    ORDER BY i.tipe_nama_barang ASC
+    GROUP BY i.tipe_nama_barang
+    ORDER BY i.tipe_nama_barang
     `;
 
     const [rows] = await pool.execute(query);
-    return rows;
+    return rows.map((item) => ({
+      ...item,
+      lentQuantity: `${item.lent_quantity} Pieces`,
+      remainingQuantity: `${item.remaining_quantity} Pieces`,
+      totalQuantity: `${item.total_quantity} Pieces`,
+      expiryDate: item.latest_purchase_date
+        ? new Date(item.latest_purchase_date).toLocaleDateString("id-ID")
+        : "N/A",
+    }));
   }
 
   static async getClassOverview() {
@@ -159,6 +177,130 @@ class AdminService {
     `;
     const [rows] = await pool.execute(query);
     return rows;
+  }
+
+  static async createMahasiswa(mahasiswaData) {
+    const { nim, nama_mahasiswa, nama_prodi } = mahasiswaData;
+
+    const [existing] = await pool.execute(
+      "SELECT nim FROM mahasiswa WHERE nim = ?",
+      [nim]
+    );
+
+    if (existing.length > 0) {
+      throw new Error("NIM sudah terdaftar");
+    }
+
+    const [prodiCheck] = await pool.execute(
+      "SELECT nama_prodi FROM prodi WHERE nama_prodi = ?",
+      [nama_prodi]
+    );
+
+    if (prodiCheck.length === 0) {
+      throw new Error("Program studi tidak ditemukan");
+    }
+
+    await pool.execute(
+      "INSERT INTO mahasiwa (nim,nama_mahasiwa,nama_prodi,mahasiswa_aktif) VALUES (?,?,?,1)",
+      [nim, nama_mahasiswa, nama_prodi]
+    );
+
+    return {
+      message: "Mahasiswa berhasil dibuat",
+      data: { nim, nama_mahasiswa, nama_prodi },
+    };
+  }
+
+  static async getMahasiswaByProgramStudy(nama_prodi, limit = 10, offset = 0) {
+    const [prodiCheck] = await pool.execute(
+      "SELECT nama_prodi FROM prodi WHERE nama_prodi = ?",
+      [nama_prodi]
+    );
+
+    if (prodiCheck.length === 0) {
+      throw new Error("Program studi tidak ditemukan");
+    }
+
+    const query = `
+      SELECT 
+        m.nim,
+        m.nama_mahasiswa,
+        m.nama_prodi,
+        m.mahasiswa_aktif,
+        m.created_at,
+        p.kepanjangan_prodi,
+        COUNT(t.peminjaman_id) as total_peminjaman,
+        COUNT(CASE WHEN t.status_peminjaman IN ('dipinjam','terlambat') THEN 1 END) as active_loans
+      FROM mahasiswa m
+      LEFT JOIN prodi p ON m.nama_prodi = p.nama_prodi
+      LEFT JOIN transaksi t ON m.nim = t.nim
+      WHERE m.nama_prodi = ?
+      GROUP BY m.nim, m.nama_mahasiswa, m.mahasiswa_aktif, m.created_at, p.kepanjangan_prodi
+      ORDER BY m.nama_mahasiswa ASC
+      LIMIT ? OFFSET ?
+    `;
+
+    const [rows] = await pool.execute(query, [nama_prodi, limit, offset]);
+    return {
+      programStudi: prodiCheck[0],
+      mahasiswa: rows,
+      total: rows.length,
+    };
+  }
+
+  static async updateMahasiswa(nim, mahasiswaData) {
+    const { nama_mahasiswa, nama_prodi, mahasiswa_aktif } = mahasiswaData;
+
+    const [existing] = await pool.execute(
+      "SELECT nama_prodi FROM prodi WHERE nama_prodi = ?",
+      [nama_prodi]
+    );
+
+    if (existing.length === 0) {
+      throw new Error("Mahasiswa tidak ditemukan");
+    }
+
+    if (nama_prodi) {
+      const [prodiCheck] = await pool.execute(
+        "SELECT nama_prodi FROM prodi WHERE nama_prodi = ?",
+        [nama_prodi]
+      );
+
+      if (prodiCheck.length === 0) {
+        throw new Error("Program studi tidak ditemukan");
+      }
+    }
+    const updateData = {};
+    const params = [];
+
+    if (nama_mahasiswa !== undefined) {
+      updateData.nama_mahasiswa = nama_mahasiswa;
+    }
+    if (nama_prodi !== undefined) {
+      updateData.nama_prodi = nama_prodi;
+    }
+    if (mahasiswa_aktif !== undefined) {
+      updateData.mahasiswa_aktif = mahasiswa_aktif;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      throw new Error("Tidak ada data yang di update");
+    }
+
+    const setUpdate = Object.keys(updateData)
+      .map((key) => `${key} = ?`)
+      .join(", ");
+    params.push(...Object.values(updateData), nim);
+
+    await pool.execute(
+      `UPDATE mahasiswa SET ${setUpdate} WHERE nim = ?`,
+      params
+    );
+
+    return {
+      message: "Mahasiswa berhasil di update",
+      data: { nim, ...updateData },
+    };
   }
 }
 

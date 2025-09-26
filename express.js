@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import http from "http";
 import adminRoutes from "./routes/adminRoutes.js";
+import inventoryRoutes from "./routes/inventoryRoutes.js";
 import { initializeSocket } from "./services/socketService.js";
 import { Server as SocketIOServer } from "socket.io";
 import dotenv from "dotenv";
@@ -20,7 +21,8 @@ app.use(express.json());
 
 initializeSocket(io);
 // initialze
-app.use("/api", adminRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/inventory", inventoryRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
