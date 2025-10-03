@@ -1,13 +1,12 @@
 import { validationResult } from "express-validator";
 import AdminService from "../services/adminService.js";
-// const AdminService = require("../services/adminService");
 class AdminController {
   static async login(req, res) {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({
-          succes: false,
+          success: false,
           message: "validation error",
           errors: errors.array(),
         });
@@ -17,13 +16,13 @@ class AdminController {
       const result = await AdminService.login(username, password);
 
       res.json({
-        succes: true,
+        success: true,
         message: "login berhasil",
         data: result,
       });
     } catch (error) {
       res.status(401).json({
-        succes: false,
+        success: false,
         message: error.message,
       });
     }

@@ -1,9 +1,9 @@
-import pool from "../data/db_setting";
+import pool from "../data/db_setting.js";
 import {
   autoRejectExpiredRequest,
   validateBorrowEligibility,
-} from "../ultils/borrowUtils";
-import { emitToAdmins, emitToStudent } from "./socketService";
+} from "../utils/borrowUtils.js";
+import { emitToAdmins, emitToStudent } from "./socketService.js";
 
 class BorrowService {
   static async submitBorrowRequest(requestData) {

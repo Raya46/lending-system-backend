@@ -1,7 +1,12 @@
 import pool from "../data/db_setting.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
-
+import xlsx from "xlsx";
+import {
+  detectFileType,
+  parsePerColumn,
+  parsePerSheet,
+} from "../utils/excelParser.mjs";
 class AdminService {
   // function untuk login admin
   static async login(username, password) {
@@ -302,6 +307,91 @@ class AdminService {
       data: { nim, ...updateData },
     };
   }
+
+  // static async bulkImportMahasiswa(
+  //   excelBuffer,
+  //   name_prodi = null,
+  //   fileName = ""
+  // ) {
+  //   try {
+  //     const workbook = xlsx.read(excelBuffer, { type: "buffer" });
+  //     const fileType = detectFileType(workbook);
+
+  //     let parsedStudents;
+
+  //     if (fileType === "perColumn") {
+  //       parsedStudents = parsePerColumn(workbook, fileName);
+  //     } else {
+  //       parsedStudents = parsePerSheet(workbook);
+  //     }
+  //     if (parsedStudents.length === 0) {
+  //       throw new Error("Tidak ada data mahasiswa yang valid dalam excel");
+  //     }
+
+  //     const connection = await pool.getConnection();
+  //     const results = {
+  //       total_processed: parsedStudents.length,
+  //       successful_imports: 0,
+  //       failed_imports: 0,
+  //       errors: [],
+  //       imported_students: [],
+  //     };
+
+  //     try {
+  //       await connection.beginTransaction();
+
+  //       for (const student of parsedStudents) {
+  //         if (!/^\d+$/.test(student.nim)) {
+  //           results.errors.push({
+  //             nim: student.nim,
+  //             name: student.name,
+  //             error: "NIM harus berupa angka",
+  //           });
+  //           results.failed_imports++;
+  //           continue;
+  //         }
+  //         const [existing] = await connection.execute(
+  //           "SELECT nim FROM mahasiswa WHERE nim = ?",
+  //           [student.nim]
+  //         );
+
+  //         if (existing.length > 0) {
+  //           results.failed_imports++;
+  //           continue;
+  //         }
+
+  //         let finalNamaProdi = nama_prodi;
+  //         if (!finalNamaProdi && student.class_group) {
+  //           const prodiMatch = student.class_group.match(
+  //             /^([A-Z]{2}\d{2}[A-Z])/
+  //           );
+  //           if (prodiMatch) {
+  //             finalNamaProdi = prodiMatch[1];
+  //           } else {
+  //             finalNamaProdi = student.class_group;
+  //           }
+  //         }
+
+  //         if (finalNamaProdi) {
+  //           finalNamaProdi = finalNamaProdi.replace(/\s/g, "");
+  //         }
+
+  //         if (!finalNamaProdi) {
+  //           results.errors.push({
+  //             nim: student.nim,
+  //             name: student.name,
+  //             error: "Tidak dapat menentukan program studi",
+  //           });
+  //           results.failed_imports++;
+  //           continue;
+  //         }
+
+  //       }
+  //     } catch (error) {}
+  //   } catch (error) {}
+  // }
+
+  static async bulkImportMahasiswa(prodiName, tahunAngkatan) {}
 }
 
 export default AdminService;

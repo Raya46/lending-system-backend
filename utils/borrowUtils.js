@@ -1,5 +1,5 @@
-import pool from "../data/db_setting";
-import { emitToAdmins, emitToStudent } from "../services/socketService";
+import pool from "../data/db_setting.js";
+import { emitToAdmins, emitToStudent } from "../services/socketService.js";
 
 export async function validateBorrowEligibility(
   nim_mahasiswa,

@@ -62,7 +62,7 @@ function parsePerSheet(workbook) {
     const worksheet = workbook.Sheets[sheetName];
     const rawData = getRawData(worksheet);
 
-    // varibale untuk menyimpan layout header 
+    // varibale untuk menyimpan layout header
     let currentHeaderLayout = null;
 
     for (const row of rawData) {
@@ -77,7 +77,7 @@ function parsePerSheet(workbook) {
           getSafeString(cell).includes("NAMA")
         );
         currentHeaderLayout = { nimIndex, nameIndex };
-        continue; // keluar dr if dan lanjut 
+        continue; // keluar dr if dan lanjut
       }
 
       // kalo bukan header, process it sebagai data row
@@ -86,7 +86,8 @@ function parsePerSheet(workbook) {
         const name = row[currentHeaderLayout.nameIndex];
 
         if (
-          nim &&!isNaN(nim) &&
+          nim &&
+          !isNaN(nim) &&
           typeof name === "string" &&
           name.trim() !== ""
         ) {
@@ -116,7 +117,6 @@ function parsePerColumn(workbook, prodi) {
   const firstSheetName = workbook.SheetNames[0];
   const worksheet = workbook.Sheets[firstSheetName];
   const rawData = getRawData(worksheet);
-
 
   let akronim = "";
   if (prodi) {
@@ -175,10 +175,18 @@ function parsePerColumn(workbook, prodi) {
   return allStudents;
 }
 
+function extractAkronim(fileName) {
+  const upperName = fileName.toUpperCase();
+  if (upperName.includes("TEKNIK LISTRIK")) return "TL";
+  if (upperName.includes("BMM")) return "BMM";
+  return "";
+}
+
 export {
   detectFileType,
   parsePerSheet,
   parsePerColumn,
   getSafeString,
   getRawData,
+  extractAkronim,
 };

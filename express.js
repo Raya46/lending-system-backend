@@ -7,7 +7,7 @@ import adminRoutes from "./routes/adminRoutes.js";
 import borrowRoutes from "./routes/borrowRoutes.js";
 import inventoryRoutes from "./routes/inventoryRoutes.js";
 import { initializeSocket } from "./services/socketService.js";
-import { autoRejectExpiredRequest } from "./ultils/borrowUtils.js";
+import { autoRejectExpiredRequest } from "./utils/borrowUtils.js";
 
 dotenv.config();
 const app = express();

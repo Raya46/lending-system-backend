@@ -1,5 +1,5 @@
 import { validationResult } from "express-validator";
-import BorrowService from "../services/borrowService";
+import BorrowService from "../services/borrowService.js";
 
 class BorrowController {
   static async submitBorrowRequest(req, res) {

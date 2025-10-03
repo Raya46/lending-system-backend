@@ -2,8 +2,8 @@ import express from "express";
 import {
   borrowRequestValidation,
   completeTransactionValidation,
-} from "../ultils/validation";
-import BorrowController from "../controllers/borrowController";
+} from "../utils/validation.js";
+import BorrowController from "../controllers/borrowController.js";
 
 const router = express.Router();
 
