@@ -1,6 +1,35 @@
 import InventoryService from "../services/inventoryService.js";
 
 class InventoryController {
+  static async getAllItems(req, res) {
+    try {
+      const { page = 1, limit = 10 } = req.query;
+      const offset = (parseInt(page) - 1) * parseInt(limit);
+
+      const result = await InventoryService.getAllItems(
+        parseInt(limit),
+        offset
+      );
+
+      res.json({
+        success: true,
+        data: result.data,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total: result.total,
+          total_pages: Math.ceil(result.total / parseInt(limit)),
+        },
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Gagal mengambil data inventory",
+        error: error.message,
+      });
+    }
+  }
+
   static async getAvailableItems(req, res) {
     try {
       const items = await InventoryService.getAvailableItems();

@@ -163,7 +163,10 @@ class AdminService {
     };
   }
 
-  static async getClassesTable() {
+  static async getClassesTable(limit = 10, offset = 0) {
+    const countQuery = `SELECT COUNT(*) as total FROM prodi`;
+    const [countResult] = await pool.execute(countQuery);
+    const total = countResult[0].total;
     const query = `
     SELECT
     p.nama_prodi as class_name,
@@ -179,9 +182,13 @@ class AdminService {
         AND t.status_peminjaman = 'dipinjam'
     GROUP BY p.nama_prodi
     ORDER BY p.nama_prodi ASC
+    LIMIT ? OFFSET ?
     `;
-    const [rows] = await pool.execute(query);
-    return rows;
+    const [rows] = await pool.execute(query, [limit, offset]);
+    return {
+      data: rows,
+      total: total,
+    };
   }
 
   static async createMahasiswa(mahasiswaData) {
@@ -391,7 +398,136 @@ class AdminService {
   //   } catch (error) {}
   // }
 
-  static async bulkImportMahasiswa(prodiName, tahunAngkatan) {}
+  static async getCurrentLoans() {
+    const query = `
+    SELECT 
+      t.peminjaman_id,
+      m.nama_mahasiswa,
+      i.tipe_nama_barang,
+      t.waktu_checkout,
+      t.waktu_pengembalian_dijanjikan,
+      TIMESTAMPDIFF(DAY, NOW(), t.waktu_pengembalian_dijanjikan) as days_remaining
+      FROM transaksi t
+      JOIN mahasiswa m ON t.nim = m.nim
+      JOIN inventory i ON t.id_barang = i.id_barang
+      WHERE t.status_peminjaman IN ('dipinjam','terlambat')
+      ORDER BY t.waktu_chekcout DESC
+      LIMIT 20
+      `;
+
+    const [rows] = await pool.execute(query);
+    return rows;
+  }
+
+  static async getAllBorrowTransactions(limit = 10, offset = 0) {
+    const countQuery = `SELECT COUNT(*) as total FROM transaksi t
+    JOIN mahasiswa m ON t.nim = m.nim
+    JOIN prodi p ON m.nama_prodi = p.nama_prodi`;
+
+    const [countResult] = await pool.execute(countQuery);
+    const total = countResult[0].total;
+
+    const query = `
+    SELECT 
+      t.peminjaman_id,
+      t.nim,
+      m.nama_mahasiswa,
+      p.nama_prodi,
+      i.barcode,
+      i.tipe_nama_barang,
+      i.brand,
+      i.model,
+      t.waktu_checkout,
+      t.waktu_pengembalian_dijanjikan,
+      t.waktu_pengembalian_sebenarnya,
+      t.status_peminjaman,
+      k.nama_kelas,
+      d.nama_dosen,
+      r.nomor_ruangan,
+      t.notes_checkout,
+      t.notes_checkin,
+      t.created_at
+    FROM transaksi t
+    JOIN mahasiswa m ON t.nim = m.nim
+    JOIN prodi p ON m.nama_prodi = p.nama_prodi
+    LEFT JOIN inventory i ON t.id_barang = i.id_barang
+    LEFT JOIN jadwal j ON t.jadwal_id = j.id_jadwal
+    LEFT JOIN kelas k ON j.id_kelas = k.id_kelas
+    LEFT JOIN dosen d ON j.nip = d.nip
+    LEFT JOIN ruangan r ON j.id_ruangan = r.id_ruangan
+    ORDER BY t.created_at ASC
+    LIMIT ? OFFSET ?
+    `;
+
+    const [rows] = await pool.execute(query, [limit, offset]);
+    const data = rows.map((row) => {
+      const metadata = row.notes_checkout ? JSON.parse(row.notes_checkout) : {};
+      return {
+        ...row,
+        lecturer_name: metadata.lecturer_name || row.nama_dosen,
+        class_name: metadata.class_name || row.nama_kelas,
+      };
+    });
+
+    return {
+      data: data,
+      total: total,
+    };
+  }
+
+  static async getAllClasses() {
+    const query = `
+    SELECT 
+      id_kelas,
+      kode_kelas,
+      nama_kelas,
+      sks
+    FROM kelas
+    ORDER BY nama_kelas ASC
+    `;
+
+    const [rows] = await pool.execute(query);
+    return rows;
+  }
+  static async getAllRooms() {
+    const query = `
+    SELECT 
+      id_ruangan,
+      nomor_ruangan,
+      gedung
+    FROM ruangan
+    ORDER BY ruangan ASC
+    `;
+
+    const [rows] = await pool.execute(query);
+    return rows;
+  }
+  static async getAllLecturers() {
+    const query = `
+    SELECT 
+      nip,
+      nama_dosen,
+      prodi
+    FROM dosen
+    ORDER BY nama_dosen ASC
+    `;
+
+    const [rows] = await pool.execute(query);
+    return rows;
+  }
+  static async getAllProgramStudies() {
+    const query = `
+    SELECT 
+      nama_prodi,
+      kepanjangan_prodi,
+      tahung_angkatan
+    FROM prodi
+    ORDER BY nama_prodi ASC
+    `;
+
+    const [rows] = await pool.execute(query);
+    return rows;
+  }
 }
 
 export default AdminService;

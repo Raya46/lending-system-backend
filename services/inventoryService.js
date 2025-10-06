@@ -1,6 +1,35 @@
 import pool from "../data/db_setting.js";
 
 class InventoryService {
+  static async getAllItems(limit = 10, offset = 0) {
+    const countQuery = `SELECT COUNT(*) as total FROM inventory`;
+    const [countResult] = await pool.execute(countQuery);
+    const total = countResult[0].total;
+
+    const query = `
+    SELECT i.*, 
+    CASE
+      WHEN t.peminjaman_id IS NOT NULL THEN m.nama_mahasiswa
+      ELSE NULL
+    END as dipinjam_oleh,
+    CASE 
+      WHEN t.peminjaman_id IS NOT NULL THEN t.waktu_pengembalian_dijanjikan
+      ELSE NULL
+    END as due_date
+    FROM inventory i
+    LEFT JOIN transaksi t ON i.id_barang = t.id_barang
+      AND t.status_peminjaman = 'dipinjam'
+    LEFT JOIN mahasiswa m ON t.nim = m.nim
+    ORDER BY i.created_at DESC
+    LIMIT ? OFFSET ?
+    `;
+    const [rows] = await pool.execute(query, [limit, offset]);
+    return {
+      data: rows,
+      total: total,
+    };
+  }
+
   static async getAvailableItems() {
     const query = `
        SELECT * FROM inventory

@@ -110,10 +110,21 @@ class AdminController {
 
   static async getClassTable(req, res) {
     try {
-      const classTableData = await AdminService.getClassesTable();
+      const { page = 1, limit = 10 } = req.query;
+      const offset = (parseInt(page) - 1) * parseInt(limit);
+      const result = await AdminService.getClassesTable(
+        parseInt(limit),
+        offset
+      );
       res.json({
         success: true,
-        data: classTableData,
+        data: result.data,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total: result.total,
+          total_pages: Math.ceil(result.total / parseInt(limit)),
+        },
       });
     } catch (error) {
       res.status(500).json({
@@ -160,6 +171,95 @@ class AdminController {
       res.status(400).json({
         success: false,
         message: error.message,
+      });
+    }
+  }
+
+  static async getCurrentLoans(req, res) {
+    try {
+      const loans = await AdminService.getCurrentLoans();
+      res.json({ success: true, data: loans });
+    } catch (error) {
+      res.status(500).json({
+        sucess: false,
+        message: "gagal mengambil data current loans",
+        error: error.message,
+      });
+    }
+  }
+
+  static async getAllBorrowTransactions(req, res) {
+    try {
+      const { page = 1, limit = 10 } = req.query;
+      const offset = (parseInt(page) - 1) * parseInt(limit);
+      const result = await AdminService.getAllBorrowTransactions(
+        parseInt(limit),
+        offset
+      );
+      res.json({
+        success: true,
+        data: result.data,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total: result.total,
+          total_pages: Math.ceil(result.total / parseInt(limit)),
+        },
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "gagal mengambil semua data transaksi",
+        error: error.message,
+      });
+    }
+  }
+
+  static async getAllClasses(req, res) {
+    try {
+      const classes = await AdminService.getAllClasses();
+      res.json({ success: true, data: classes });
+    } catch (error) {
+      res.status(500).json({
+        sucess: false,
+        message: "gagal mengambil data class",
+        error: error.message,
+      });
+    }
+  }
+  static async getAllRooms(req, res) {
+    try {
+      const rooms = await AdminService.getAllRooms();
+      res.json({ success: true, data: rooms });
+    } catch (error) {
+      res.status(500).json({
+        sucess: false,
+        message: "gagal mengambil data rooms",
+        error: error.message,
+      });
+    }
+  }
+  static async getAllLecturers(req, res) {
+    try {
+      const lecturers = await AdminService.getAllLecturers();
+      res.json({ success: true, data: lecturers });
+    } catch (error) {
+      res.status(500).json({
+        sucess: false,
+        message: "gagal mengambil data Lecturers",
+        error: error.message,
+      });
+    }
+  }
+  static async getAllProgramStudies(req, res) {
+    try {
+      const programStudies = await AdminService.getAllProgramStudies();
+      res.json({ success: true, data: programStudies });
+    } catch (error) {
+      res.status(500).json({
+        sucess: false,
+        message: "gagal mengambil data ProgramStudies",
+        error: error.message,
       });
     }
   }
