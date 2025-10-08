@@ -411,7 +411,7 @@ class AdminService {
       JOIN mahasiswa m ON t.nim = m.nim
       JOIN inventory i ON t.id_barang = i.id_barang
       WHERE t.status_peminjaman IN ('dipinjam','terlambat')
-      ORDER BY t.waktu_chekcout DESC
+      ORDER BY t.waktu_checkout DESC
       LIMIT 20
       `;
 
@@ -496,7 +496,7 @@ class AdminService {
       nomor_ruangan,
       gedung
     FROM ruangan
-    ORDER BY ruangan ASC
+    ORDER BY nomor_ruangan ASC
     `;
 
     const [rows] = await pool.execute(query);
@@ -520,7 +520,7 @@ class AdminService {
     SELECT 
       nama_prodi,
       kepanjangan_prodi,
-      tahung_angkatan
+      tahun_angkatan
     FROM prodi
     ORDER BY nama_prodi ASC
     `;
