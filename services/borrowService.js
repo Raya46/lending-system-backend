@@ -189,7 +189,7 @@ class BorrowService {
             accepted_at: new Date().toISOString(),
             accepted_by_admin: adminId,
             student_arrived_at: new Date().toISOString(),
-            status: "ready_for_barcode_scane",
+            status: "ready_for_barcode_scan",
           }),
           transactionId,
         ]

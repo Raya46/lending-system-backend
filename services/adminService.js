@@ -528,6 +528,118 @@ class AdminService {
     const [rows] = await pool.execute(query);
     return rows;
   }
+
+  static async getActiveSchedules() {
+    const query = `
+    SELECT
+      j.id_jadwal,
+      j.hari_dalam_seminggu,
+      j.waktu_mulai,
+      j.waktu_berakhir,
+      k.nama_kelas,
+      d.nama_dosen,
+      r.nomor_ruangan
+    FROM jadwal j
+    LEFT JOIN kelas k ON j.id_kelas = k.id_kelas
+    LEFT JOIN dosen d ON j.nip = d.nip
+    LEFT JOIN ruangan r ON j.id_ruangan = r.id_ruangan
+    ORDER BY
+      CASE j.hari_dalam_seminggu
+        WHEN 'Senin' THEN 1
+        WHEN 'Selasa' THEN 2
+        WHEN 'Rabu' THEN 3
+        WHEN 'Kamis' THEN 4
+        WHEN 'Jumat' THEN 5
+        WHEN 'Sabtu' THEN 6
+        WHEN 'Minggu' THEN 7
+      END,
+      j.waktu_mulai ASC
+    `;
+
+    const [rows] = await pool.execute(query);
+    return rows;
+  }
+
+  static async getClassDetails(prodiName) {
+    const [prodiInfo] = await pool.execute(
+      "SELECT * FROM prodi WHERE nama_prodi = ?",
+      [prodiName]
+    );
+
+    if (prodiInfo.length === 0) {
+      return null;
+    }
+
+    const [scheduleInfo] = await pool.execute(
+      `
+      SELECT
+        GROUP_CONCAT(DISTINCT d.nama_dosen SEPARATOR ', ') as lecturers,
+        GROUP_CONCAT(DISTINCT r.nomor_ruangan SEPARATOR ', ') as rooms,
+        GROUP_CONCAT(DISTINCT CONCAT(j.hari_dalam_seminggu, ' ', j.waktu_mulai, '-', j.waktu_berakhir) SEPARATOR '; ') as schedules
+      FROM jadwal j
+      LEFT JOIN dosen d ON j.nip = d.nip
+      LEFT JOIN ruangan r ON j.id_ruangan = r.id_ruangan
+      WHERE j.nama_prodi = ?
+      `,
+      [prodiName]
+    );
+
+    const [borrowers] = await pool.execute(
+      `
+      SELECT
+        m.nama_mahasiswa as student_name,
+        m.nim,
+        COUNT(t.peminjaman_id) as number_of_times_borrowing,
+        GROUP_CONCAT(
+          CASE WHEN t.status_peminjaman = 'dikembalikan' THEN
+            CONCAT(i.tipe_nama_barang, ' - ', i.brand, ' ', i.model)
+          END SEPARATOR '; '
+        ) as returned_items,
+        GROUP_CONCAT(
+          CASE WHEN t.status_peminjaman IN ('dipinjam','terlambat') THEN
+            CONCAT(i.tipe_nama_barang, ' - ', i.brand, ' ', i.model)
+          END SEPARATOR '; '
+        ) as unreturned_items,
+         CASE 
+          WHEN COUNT(CASE WHEN t.status_peminjaman IN ('dipinjam', 'terlambat') THEN 1 END) > 0 THEN 'active_borrower'
+          ELSE 'inactive_borrower'
+        END as borrower_type,
+        MAX(t.waktu_checkout) as last_borrow_time,
+        COUNT(CASE WHEN t.status_peminjaman IN ('dipinjam','terlambat') THEN 1 END) as active_loans
+        FROM mahasiswa m
+        LEFT JOIN transaksi t ON m.nim = t.nim
+        LEFT JOIN inventory i ON t.id_barang = i.id_barang
+        WHERE m.nama_prodi = ?
+        GROUP BY m.nim, m.nama_mahasiswa
+        ORDER BY active_loans DESC, number_of_times_borrowing DESC, m.nama_mahasiswa ASC
+      `,
+      [prodiName]
+    );
+
+    const borrowersWithLoans = borrowers.filter(
+      (b) => b.number_of_times_borrowing > 0
+    );
+    const totalBorrowers = borrowersWithLoans.length;
+    const activeBorrowers = borrowersWithLoans.filter(
+      (b) => b.active_loans > 0
+    );
+    const completedBorrowers = totalBorrowers - activeBorrowers;
+
+    return {
+      class_info: {
+        ...prodiInfo[0],
+        lecturers: prodiInfo[0].lecturer || scheduleInfo[0]?.lecturers || "N/A",
+        rooms: prodiInfo[0].room || scheduleInfo[0].rooms || "N/A",
+        schedules: prodiInfo[0].schedule || scheduleInfo[0].schedules || "N/A",
+      },
+      borrowers: borrowers,
+      statistics: {
+        total_borrowers: totalBorrowers,
+        active_borrowers: activeBorrowers,
+        completed_borrowers: completedBorrowers,
+      },
+    };
+  }
 }
 
 export default AdminService;

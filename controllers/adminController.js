@@ -263,6 +263,43 @@ class AdminController {
       });
     }
   }
+  static async getClassDetails(req, res) {
+    try {
+      const classDetails = await AdminService.getClassDetails(req.params.id);
+      if (!classDetails) {
+        return res.status(404).json({
+          success: false,
+          message: "Kelas tidak ditemukan",
+        });
+      }
+      res.json({
+        success: true,
+        data: classDetails,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Gagal mengambil detail kelas",
+        error: error.message,
+      });
+    }
+  }
+
+  static async getActiveSchedules(req, res) {
+    try {
+      const schedules = await AdminService.getActiveSchedules();
+      res.json({
+        success: true,
+        data: schedules,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Gagal mengambil data jadwal aktif",
+        error: error.message,
+      });
+    }
+  }
 }
 
 export default AdminController;
