@@ -78,10 +78,21 @@ class AdminController {
 
   static async getInventoryData(req, res) {
     try {
-      const inventory = await AdminService.getInventoryData();
+      const { page = 1, limit = 10 } = req.query;
+      const offset = (parseInt(page) - 1) * parseInt(limit);
+      const inventoryResult = await AdminService.getInventoryData(
+        parseInt(limit),
+        offset
+      );
       res.json({
         success: true,
-        data: inventory,
+        data: inventoryResult.data,
+        pagination: {
+          current_page: parseInt(page),
+          per_page: parseInt(limit),
+          total_items: inventoryResult.total,
+          total_pages: Math.ceil(inventoryResult.total / parseInt(limit)),
+        },
       });
     } catch (error) {
       res.status(500).json({
@@ -297,6 +308,52 @@ class AdminController {
         success: false,
         message: "Gagal mengambil data jadwal aktif",
         error: error.message,
+      });
+    }
+  }
+
+  static async importMahasiswa(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "File excel harus diupload",
+        });
+      }
+
+      if (
+        !req.file.mimetype.includes("spreadsheet") &&
+        !req.file.originalname.match(/\.(xlsx|xls)$/i)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "file harus berformat excel (.xlsx atau .xls)",
+        });
+      }
+
+      const { nama_prodi } = req.body;
+
+      if (!nama_prodi) {
+        return res.status(400).json({
+          success: false,
+          message: "Program studi harus dipilih",
+        });
+      }
+
+      const result = await AdminService.importMahasiswa(
+        req.file.buffer,
+        nama_prodi
+      );
+
+      res.status(201).json({
+        success: true,
+        message: `import selesai: ${result.succesful_imports} berhasil, ${result.failed_imports} gagal`,
+        data: result,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message,
       });
     }
   }

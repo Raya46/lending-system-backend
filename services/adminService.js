@@ -8,6 +8,20 @@ import {
   parsePerSheet,
 } from "../utils/excelParser.mjs";
 class AdminService {
+  static async extractAcademicYear(nim) {
+    if (nim || nim.length < 2) return null;
+    const yearPrefix = nim.substring(0, 2);
+    const currentYear = new Date().getFullYear();
+    const currentCentury = Math.floor(currentYear / 100) * 100;
+
+    // convert 2-digit year to 4-digit year
+    let academicYear = currentCentury + parseInt(yearPrefix);
+
+    if (academicYear > currentYear) {
+      academicYear -= 100;
+    }
+    return `${academicYear}/${academicYear + 1}`;
+  }
   // function untuk login admin
   static async login(username, password) {
     const [users] = await pool.execute(
@@ -113,7 +127,10 @@ class AdminService {
     };
   }
 
-  static async getInventoryData() {
+  static async getInventoryData(limit = 10, offset = 0) {
+    const queryCount = `SELECT COUNT (tipe_nama_barang) as total FROM inventory`;
+    const [countResult] = await pool.execute(queryCount);
+    const totalItems = countResult[0].total;
     const query = `
     SELECT 
       i.tipe_nama_barang as item,
@@ -130,10 +147,12 @@ class AdminService {
     LEFT JOIN transaksi t ON i.id_barang = t.id_barang
     GROUP BY i.tipe_nama_barang
     ORDER BY i.tipe_nama_barang
+    LIMIT ? OFFSET ?
     `;
 
-    const [rows] = await pool.execute(query);
-    return rows.map((item) => ({
+    const [rows] = await pool.execute(query, [limit, offset]);
+
+    const data = rows.map((item) => ({
       ...item,
       lentQuantity: `${item.lent_quantity} Pieces`,
       remainingQuantity: `${item.remaining_quantity} Pieces`,
@@ -142,6 +161,10 @@ class AdminService {
         ? new Date(item.latest_purchase_date).toLocaleDateString("id-ID")
         : "N/A",
     }));
+    return {
+      data: data,
+      total: totalItems,
+    };
   }
 
   static async getClassOverview() {
@@ -315,88 +338,105 @@ class AdminService {
     };
   }
 
-  // static async bulkImportMahasiswa(
-  //   excelBuffer,
-  //   name_prodi = null,
-  //   fileName = ""
-  // ) {
-  //   try {
-  //     const workbook = xlsx.read(excelBuffer, { type: "buffer" });
-  //     const fileType = detectFileType(workbook);
+  static async importMahasiswa(excelBuffer, nama_prodi) {
+    try {
+      const workbook = xlsx.read(excelBuffer, { type: "buffer" });
+      const fileType = detectFileType(workbook);
 
-  //     let parsedStudents;
+      let parsedStudents;
+      if (fileType == "perColumn") {
+        parsedStudents = parsePerColumn(workbook, null);
+      } else {
+        parsedStudents = parsePerSheet(workbook);
+      }
+      if (parsedStudents.length === 0) {
+        throw new Error(
+          "Tidak ada data mahasiswa yang valid ditemukan dalam excel"
+        );
+      }
 
-  //     if (fileType === "perColumn") {
-  //       parsedStudents = parsePerColumn(workbook, fileName);
-  //     } else {
-  //       parsedStudents = parsePerSheet(workbook);
-  //     }
-  //     if (parsedStudents.length === 0) {
-  //       throw new Error("Tidak ada data mahasiswa yang valid dalam excel");
-  //     }
+      const connection = await pool.getConnection();
+      const results = {
+        total_processed: parsedStudents.length,
+        succesful_imports: 0,
+        failed_imports: 0,
+        erros: [],
+        imported_students: [],
+      };
 
-  //     const connection = await pool.getConnection();
-  //     const results = {
-  //       total_processed: parsedStudents.length,
-  //       successful_imports: 0,
-  //       failed_imports: 0,
-  //       errors: [],
-  //       imported_students: [],
-  //     };
+      try {
+        await connection.beginTransaction();
+        for (const student of parsedStudents) {
+          try {
+            if (!/^\d+$/.test(student.nim)) {
+              results.erros.push({
+                nim: student.nim,
+                name: student.name,
+                error: "NIM harus berupa angka",
+              });
+              results.failed_imports++;
+              continue;
+            }
 
-  //     try {
-  //       await connection.beginTransaction();
+            const [existing] = await connection.execute(
+              "SELECT nim FROM mahasiswa WHERE nim = ?",
+              [student.nim]
+            );
 
-  //       for (const student of parsedStudents) {
-  //         if (!/^\d+$/.test(student.nim)) {
-  //           results.errors.push({
-  //             nim: student.nim,
-  //             name: student.name,
-  //             error: "NIM harus berupa angka",
-  //           });
-  //           results.failed_imports++;
-  //           continue;
-  //         }
-  //         const [existing] = await connection.execute(
-  //           "SELECT nim FROM mahasiswa WHERE nim = ?",
-  //           [student.nim]
-  //         );
+            if (existing.length > 0) {
+              // skip duplicate nim
+              results.failed_imports++;
+              continue;
+            }
+            let finalNamaProdi = nama_prodi;
 
-  //         if (existing.length > 0) {
-  //           results.failed_imports++;
-  //           continue;
-  //         }
+            if (finalNamaProdi) {
+              finalNamaProdi = finalNamaProdi.replace(/\s/g, "");
+            }
 
-  //         let finalNamaProdi = nama_prodi;
-  //         if (!finalNamaProdi && student.class_group) {
-  //           const prodiMatch = student.class_group.match(
-  //             /^([A-Z]{2}\d{2}[A-Z])/
-  //           );
-  //           if (prodiMatch) {
-  //             finalNamaProdi = prodiMatch[1];
-  //           } else {
-  //             finalNamaProdi = student.class_group;
-  //           }
-  //         }
+            const academicYear = AdminService.extractAcademicYear(student.nim);
+            if (!academicYear) {
+              results.erros.push({
+                nim: student.nim,
+                name: student.name,
+                error: "tidak dapat menentukan tahun dari nim",
+              });
+              results.failed_imports++;
+              continue;
+            }
+            await connection.execute(
+              "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi, mahasiswa_aktif) VALUES (?,?,?,1)",
+              [student.nim, student.name.trim(), finalNamaProdi]
+            );
+            results.succesful_imports++;
+            results.imported_students.push({
+              nim: student.nim,
+              name: student.name.trim(),
+              nama_prodi: finalNamaProdi,
+              class_group: student.class_group,
+            });
+          } catch (error) {
+            results.erros.push({
+              nim: student.nim,
+              name: student.name,
+              error: error.message,
+            });
+            results.failed_imports++;
+          }
+        }
 
-  //         if (finalNamaProdi) {
-  //           finalNamaProdi = finalNamaProdi.replace(/\s/g, "");
-  //         }
-
-  //         if (!finalNamaProdi) {
-  //           results.errors.push({
-  //             nim: student.nim,
-  //             name: student.name,
-  //             error: "Tidak dapat menentukan program studi",
-  //           });
-  //           results.failed_imports++;
-  //           continue;
-  //         }
-
-  //       }
-  //     } catch (error) {}
-  //   } catch (error) {}
-  // }
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
+      }
+      return results;
+    } catch (error) {
+      throw new Error(`Gagal memproses file excel: ${error.message}`);
+    }
+  }
 
   static async getCurrentLoans() {
     const query = `

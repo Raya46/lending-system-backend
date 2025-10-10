@@ -321,16 +321,20 @@ class BorrowService {
 
       const [completeData] = await connection.execute(
         `SELECT 
-            t.*,
+            t.peminjaman_id,
+            t.nim,
             m.nama_mahasiswa,
             i.tipe_nama_barang,
             i.brand,
             i.model,
-            i.barcode
-            FROM transaksi t
-            JOIN mahasiswa m ON t.nim = m.nim
-            JOIN inventory i ON t.id_barang = i.id_barang
-            WHERE t.peminjaman_id = ?`,
+            i.barcode,
+            t.waktu_checkout,
+            t.waktu_pengembalian_dijanjikan,
+            t.notes_checkout
+          FROM transaksi t
+          JOIN mahasiswa m ON t.nim = m.nim
+          JOIN inventory i ON t.id_barang = i.id_barang
+          WHERE t.peminjaman_id = ?`,
         [transactionId]
       );
 
@@ -468,7 +472,7 @@ class BorrowService {
     [
       ...pendingTransactions,
       ...acceptedTransactions,
-      ...acceptedTransactions,
+      ...activeTransactions,
     ].forEach((transaction) => {
       const metadata = JSON.parse(transaction.notes_checkout || "{}");
       results.push({
