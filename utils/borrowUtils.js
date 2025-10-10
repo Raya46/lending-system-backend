@@ -80,7 +80,7 @@ export async function autoRejectExpiredRequest(transactionId) {
             FROM transaksi t
             JOIN mahasiswa m ON t.nim = m.nim
             WHERE t.peminjaman_id = ?
-                AND t.sattus_peminjaman = 'pending'
+                AND t.status_peminjaman = 'pending'
                 AND t.waktu_pengembalian_dijanjikan <= NOW()
             `,
       [transactionId]

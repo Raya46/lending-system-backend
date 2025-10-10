@@ -10,21 +10,12 @@ const router = express.Router();
 
 router.post(
   "/request",
-  authMiddleware,
   borrowRequestValidation,
   BorrowController.submitBorrowRequest
 );
+router.get("/status/:nim", BorrowController.getUserBorrowStatus);
 
-router.get(
-  "/pending-requests",
-  authMiddleware,
-  BorrowController.getPendingRequest
-);
-router.get(
-  "/status/:nim",
-  authMiddleware,
-  BorrowController.getUserBorrowStatus
-);
+router.get("/pending-requests", BorrowController.getPendingRequest);
 router.get(
   "/scan/:barcode",
   authMiddleware,

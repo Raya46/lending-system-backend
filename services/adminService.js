@@ -30,7 +30,7 @@ class AdminService {
         username: user.username,
         role: user.role,
       },
-      process.env.JWT_SECRET || "secret",
+      process.env.JWT_SECRET || "rahasia",
       { expiresIn: "24h" }
     );
 
@@ -420,7 +420,8 @@ class AdminService {
   }
 
   static async getAllBorrowTransactions(limit = 10, offset = 0) {
-    const countQuery = `SELECT COUNT(*) as total FROM transaksi t
+    const countQuery = `
+    SELECT COUNT(*) as total FROM transaksi t
     JOIN mahasiswa m ON t.nim = m.nim
     JOIN prodi p ON m.nama_prodi = p.nama_prodi`;
 
