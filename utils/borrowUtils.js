@@ -64,6 +64,7 @@ export async function validateBorrowEligibility(
     };
   } catch (error) {
     console.log(error);
+    throw error;
   } finally {
     connection.release();
   }

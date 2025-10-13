@@ -22,7 +22,7 @@ async function saveStudentsToDB(students) {
 
   let connection;
   try {
-    connection = await pool.getConnection();
+    connection = await pool.connect();
     await connection.beginTransaction();
 
     // 1. Get unique program studies from students - STANDARDIZED ONES
@@ -34,14 +34,17 @@ async function saveStudentsToDB(students) {
     console.log("Unique program studies found (standardized):", uniqueProdi);
 
     // 2. Check which ones exist in the prodi table
-    const existingProdiQuery = `SELECT nama_prodi FROM prodi WHERE nama_prodi IN (${uniqueProdi
-      .map(() => "?")
-      .join(",")})`;
-    const [existingProdi] = await connection.query(
+    const placeholders = uniqueProdi
+      .map((_, index) => `$${index + 1}`)
+      .join(",");
+    const existingProdiQuery = `SELECT nama_prodi FROM prodi WHERE nama_prodi IN (${placeholders})`;
+    const existingProdiResult = await connection.query(
       existingProdiQuery,
       uniqueProdi
     );
-    const existingProdiNames = existingProdi.map((row) => row.nama_prodi);
+    const existingProdiNames = existingProdiResult.rows.map(
+      (row) => row.nama_prodi
+    );
 
     console.log("Existing program studies in database:", existingProdiNames);
 
@@ -56,38 +59,51 @@ async function saveStudentsToDB(students) {
         missingProdi
       );
 
-      // 4. Insert missing program studies
-      const insertProdiValues = missingProdi.map((prodi) => [prodi]);
-      const insertProdiSql = `INSERT INTO prodi (nama_prodi) VALUES ?`;
-      await connection.query(insertProdiSql, [insertProdiValues]);
+      // 4. Insert missing program studies one by one for PostgreSQL
+      for (const prodi of missingProdi) {
+        await connection.query("INSERT INTO prodi (nama_prodi) VALUES ($1)", [
+          prodi,
+        ]);
+      }
       console.log(`✅ Created ${missingProdi.length} new program studies`);
     }
 
-    // 5. Now insert students with standardized prodi names
-    const values = students.map((student) => [
-      student.nim,
-      student.name,
-      standardizeProdiName(student.class_group), // Apply standardization
-    ]);
+    // 5. Now insert students with standardized prodi names - one by one for PostgreSQL
+    let insertedCount = 0;
+    let updatedCount = 0;
 
-    const sql = `
-        INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) 
-        VALUES ? 
-        ON DUPLICATE KEY UPDATE 
-        nama_mahasiswa = VALUES(nama_mahasiswa), 
-        nama_prodi = VALUES(nama_prodi)`;
+    for (const student of students) {
+      const standardizedProdi = standardizeProdiName(student.class_group);
 
-    const [result] = await connection.query(sql, [values]);
+      // Check if student exists
+      const existingStudent = await connection.query(
+        "SELECT nim FROM mahasiswa WHERE nim = $1",
+        [student.nim]
+      );
+
+      if (existingStudent.rows.length === 0) {
+        // Insert new student
+        await connection.query(
+          "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES ($1, $2, $3)",
+          [student.nim, student.name, standardizedProdi]
+        );
+        insertedCount++;
+      } else {
+        // Update existing student
+        await connection.query(
+          "UPDATE mahasiswa SET nama_mahasiswa = $1, nama_prodi = $2 WHERE nim = $3",
+          [student.name, standardizedProdi, student.nim]
+        );
+        updatedCount++;
+      }
+    }
 
     await connection.commit();
     console.log("✅ Database operation completed successfully");
 
     return {
-      inserted:
-        result.affectedRows > result.changedRows
-          ? result.affectedRows - result.changedRows
-          : 0,
-      updated: result.changedRows,
+      inserted: insertedCount,
+      updated: updatedCount,
       newProdiCreated: missingProdi.length,
     };
   } catch (error) {

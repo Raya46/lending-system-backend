@@ -17,6 +17,7 @@ postgres_schema.sql
 lending_system_db_test.sql
 migrate_data.js
 setup_postgres.js
+fix_sequence.js
 
 # Additional database migration files
 *.sql

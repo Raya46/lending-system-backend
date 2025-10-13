@@ -52,6 +52,7 @@ class AdminController {
         data: items,
       });
     } catch (error) {
+      console.error("Error in getLowStockItems:", error);
       res.status(500).json({
         success: false,
         message: "Gagal mengambil data low stock items",

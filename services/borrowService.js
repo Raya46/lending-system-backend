@@ -25,38 +25,38 @@ class BorrowService {
       waktu_pengembalian_dijanjikan
     );
 
-    const connection = await pool.connect();
+    const client = await pool.connect();
 
     try {
-      await connection.beginTransaction();
+      await client.query("BEGIN");
 
-      const existingStudent = await connection.query(
+      const existingStudent = await client.query(
         "SELECT nim FROM mahasiswa WHERE nim = $1",
         [nim_mahasiswa]
       );
 
       if (existingStudent.rows.length === 0) {
-        await connection.query(
+        await client.query(
           "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES ($1,$2,$3)",
           [nim_mahasiswa, nama_mahasiswa, nama_prodi]
         );
       }
 
-      const existingLecturer = await connection.query(
+      const existingLecturer = await client.query(
         "SELECT nip FROM dosen WHERE nama_dosen = $1",
         [nama_dosen]
       );
 
       const lecturerNIP = existingLecturer.rows[0].nip;
 
-      const existingClass = await connection.query(
+      const existingClass = await client.query(
         "SELECT id_kelas FROM kelas WHERE nama_kelas = $1",
         [kelas]
       );
 
       const classId = existingClass.rows[0].id_kelas;
 
-      const pendingCheck = await connection.query(
+      const pendingCheck = await client.query(
         `SELECT peminjaman_id FROM transaksi
         WHERE nim = $1 AND status_peminjaman IN ('pending','accepted')
         AND waktu_pengembalian_dijanjikan > NOW()
@@ -84,7 +84,7 @@ class BorrowService {
         validation_passed: true,
       };
 
-      const transactionResult = await connection.query(
+      const transactionResult = await client.query(
         `INSERT INTO transaksi
             (nim,jadwal_id, id_barang, waktu_pengembalian_dijanjikan, status_peminjaman, notes_checkout, nama_prodi)
             VALUES ($1,$2,$3,$4,'pending',$5,$6) RETURNING peminjaman_id`,
@@ -99,9 +99,9 @@ class BorrowService {
       );
 
       const transactionId = transactionResult.rows[0].peminjaman_id;
-      await connection.commit();
+      await client.query("COMMIT");
 
-      const requestDataResult = await connection.query(
+      const requestDataResult = await client.query(
         `SELECT
             t.peminjaman_id,
             t.nim,
@@ -147,20 +147,20 @@ class BorrowService {
         status: "pending_acceptance",
       };
     } catch (error) {
-      await connection.rollback();
+      await client.query("ROLLBACK");
       throw error;
     } finally {
-      connection.release();
+      client.release();
     }
   }
 
   static async acceptBorrowRequest(transactionId, adminId) {
-    const connection = await pool.connect();
+    const client = await pool.connect();
 
     try {
-      await connection.beginTransaction();
+      await client.query("BEGIN");
 
-      const transactionData = await connection.query(
+      const transactionData = await client.query(
         `SELECT t.*, m.nama_mahasiswa
             FROM transaksi t
             JOIN mahasiswa m ON t.nim = m.nim
@@ -172,10 +172,10 @@ class BorrowService {
         throw new Error("Transaksi tidak ditemukan atau sudah diproses");
       }
 
-      const transaction = transactionData[0];
+      const transaction = transactionData.rows[0];
       const metadata = JSON.parse(transaction.notes_checkout);
 
-      await connection.query(
+      await client.query(
         `
         UPDATE transaksi
         SET status_peminjaman = 'accepted',
@@ -196,7 +196,7 @@ class BorrowService {
         ]
       );
 
-      await connection.commit();
+      await client.query("COMMIT");
 
       emitToStudent(transaction.nim, "borrow_accepted", {
         transaction_id: transactionId,
@@ -221,10 +221,10 @@ class BorrowService {
         message: "Request accepted, pleas scan barcode in item",
       };
     } catch (error) {
-      await connection.rollback();
+      await client.query("ROLLBACK");
       throw error;
     } finally {
-      connection.release();
+      client.release();
     }
   }
 
@@ -240,7 +240,7 @@ class BorrowService {
     if (itemData.rows.length === 0) {
       throw new Error("Barcode tidak ditemukan atau item tidak tersedia");
     }
-    return itemData[0];
+    return itemData.rows[0];
   }
 
   static async completeTransaction(
@@ -249,10 +249,10 @@ class BorrowService {
     itemId,
     waktuPengembalian
   ) {
-    const connection = await pool.connect();
+    const client = await pool.connect();
 
     try {
-      await connection.beginTransaction();
+      await client.query("BEGIN");
 
       const returnDateTime = new Date(waktuPengembalian);
       const mysqlDateTime = returnDateTime
@@ -260,7 +260,7 @@ class BorrowService {
         .slice(0, 19)
         .replace("T", " ");
 
-      const transactionData = await connection.query(
+      const transactionData = await client.query(
         `SELECT t.*, m.nama_mahasiswa, p.nama_prodi
         FROM transaksi t
         JOIN mahasiswa m ON t.nim = m.nim
@@ -277,10 +277,10 @@ class BorrowService {
         );
       }
 
-      const transaction = transactionData[0];
+      const transaction = transactionData.rows[0];
       const metadata = JSON.parse(transaction.notes_checkout);
 
-      const itemCheck = await connection.query(
+      const itemCheck = await client.query(
         "SELECT status FROM inventory WHERE id_barang = $1 AND status = $2",
         [itemId, "tersedia"]
       );
@@ -289,7 +289,7 @@ class BorrowService {
         throw new Error("Item tidak tersedia");
       }
 
-      await connection.query(
+      await client.query(
         `UPDATE transaksi
         SET id_barang = $1,
         admin_id_checkout = $2,
@@ -313,14 +313,14 @@ class BorrowService {
         ]
       );
 
-      await connection.query(
+      await client.query(
         "UPDATE inventory SET status = $1 WHERE id_barang = $2",
         ["dipinjam", itemId]
       );
 
-      await connection.commit();
+      await client.query("COMMIT");
 
-      const completeData = await connection.query(
+      const completeData = await client.query(
         `SELECT
             t.peminjaman_id,
             t.nim,
@@ -364,20 +364,20 @@ class BorrowService {
         transaction_data: completeTransactionData,
       };
     } catch (error) {
-      await connection.rollback();
+      await client.query("ROLLBACK");
       throw error;
     } finally {
-      connection.release();
+      client.release();
     }
   }
 
   static async rejectBorrowRequest(transactionId, adminId, alasanPenolakan) {
-    const connection = await pool.connect();
+    const client = await pool.connect();
 
     try {
-      await connection.beginTransaction();
+      await client.query("BEGIN");
 
-      const transactionDetails = await connection.query(
+      const transactionDetails = await client.query(
         "SELECT nim, notes_checkout FROM transaksi WHERE peminjaman_id = $1 AND status_peminjaman IN ($2,$3)",
         [transactionId, "pending", "accepted"]
       );
@@ -386,10 +386,10 @@ class BorrowService {
         throw new Error("Transaksi tidak ditemukan atau sudah diproses");
       }
 
-      const transaction = transactionDetails[0];
+      const transaction = transactionDetails.rows[0];
       const metadata = JSON.parse(transaction.notes_checkout);
 
-      await connection.query(
+      await client.query(
         `
         UPDATE transaksi
         SET status_peminjaman = 'dikembalikan',
@@ -401,7 +401,7 @@ class BorrowService {
         [adminId, `Ditolaj oleh admin: ${alasanPenolakan}`, transactionId]
       );
 
-      await connection.commit();
+      await client.query("COMMIT");
 
       emitToStudent(transaction.nim, "borrow_rejected", {
         transaction_id: transactionId,
@@ -412,10 +412,10 @@ class BorrowService {
 
       return true;
     } catch (error) {
-      await connection.rollback();
+      await client.query("ROLLBACK");
       throw error;
     } finally {
-      connection.release();
+      client.release();
     }
   }
 
@@ -542,38 +542,38 @@ class BorrowService {
       admin_id,
     } = requestData;
 
-    const connection = await pool.connect();
+    const client = await pool.connect();
 
     try {
-      await connection.beginTransaction();
+      await client.query("BEGIN");
 
-      const existingStudent = await connection.query(
+      const existingStudent = await client.query(
         "SELECT nim FROM mahasiswa WHERE nim = $1",
         [nim_mahasiswa]
       );
 
       if (existingStudent.rows.length === 0) {
-        await connection.query(
+        await client.query(
           "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES ($1,$2,$3)",
           [nim_mahasiswa, nama_mahasiswa, nama_prodi]
         );
       }
 
-      const existingLecturer = await connection.query(
+      const existingLecturer = await client.query(
         "SELECT nip FROM dosen WHERE nama_dosen = $1",
         [nama_dosen]
       );
 
       const lecturerNIP = existingLecturer.rows[0].nip;
 
-      const existingClass = await connection.query(
+      const existingClass = await client.query(
         "SELECT id_kelas FROM kelas WHERE nama_kelas = $1",
         [kelas]
       );
 
       const classId = existingClass.rows[0].id_kelas;
 
-      const itemCheck = await connection.query(
+      const itemCheck = await client.query(
         "SELECT status FROM inventory WHERE id_barang = $1 AND status = $2",
         [id_barang, "tersedia"]
       );
@@ -597,7 +597,7 @@ class BorrowService {
         lending_admin: admin_id,
       };
 
-      const transactionResult = await connection.query(
+      const transactionResult = await client.query(
         `INSERT INTO transaksi
             (nim,jadwal_id, id_barang, waktu_checkout, waktu_pengembalian_dijanjikan, status_peminjaman, admin_id_checkout,notes_checkout, nama_prodi)
             VALUES ($1,$2,$3,NOW(),$4,'dipinjam',$5,$6,$7) RETURNING peminjaman_id`,
@@ -613,13 +613,13 @@ class BorrowService {
       );
 
       const transactionId = transactionResult.rows[0].peminjaman_id;
-      await connection.query(
+      await client.query(
         "UPDATE inventory SET status = $1 WHERE id_barang = $2",
         ["dipinjam", id_barang]
       );
-      await connection.commit();
+      await client.query("COMMIT");
 
-      const completeData = await connection.query(
+      const completeData = await client.query(
         `SELECT
             t.peminjaman_id,
             t.nim,
@@ -665,10 +665,10 @@ class BorrowService {
         message: "Direct lending completed successfully",
       };
     } catch (error) {
-      await connection.rollback();
+      await client.query("ROLLBACK");
       throw error;
     } finally {
-      connection.release();
+      client.release();
     }
   }
 }

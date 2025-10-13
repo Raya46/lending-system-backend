@@ -93,24 +93,29 @@ class AdminService {
 
   static async getLowStockItems() {
     const query = `
-    SELECT 
+    SELECT
       tipe_nama_barang as name,
-      COUNT(*) as remaining_quantity,
-      status
+      COUNT(*) as remaining_quantity
     FROM inventory
     WHERE status = 'tersedia'
-    GROUP BY tipe_nama_barang, status
-    HAVING remaining_quantity <= 15
-    ORDER BY remaining_quantity ASC
+    GROUP BY tipe_nama_barang
+    HAVING COUNT(*) <= 15
+    ORDER BY COUNT(*) ASC
     LIMIT 10
     `;
 
-    const result = await pool.query(query);
-    return result.rows.map((item) => ({
-      name: item.name,
-      remainingQuantity: item.remainingQuantity,
-      status: item.remaining_quantity <= 5 ? "Critical" : "Low",
-    }));
+    try {
+      const result = await pool.query(query);
+      console.log("Low stock items query result:", result.rows);
+      return result.rows.map((item) => ({
+        name: item.name,
+        remainingQuantity: parseInt(item.remaining_quantity),
+        status: parseInt(item.remaining_quantity) <= 5 ? "Critical" : "Low",
+      }));
+    } catch (error) {
+      console.error("Error executing low stock items query:", error);
+      throw error;
+    }
   }
 
   static async getInventorySummary() {
@@ -168,26 +173,31 @@ class AdminService {
   }
 
   static async getClassOverview() {
-    const queries = [
-      "SELECT COUNT(*) as total_classes FROM prodi",
-      "SELECT COUNT(*) as total_students FROM mahasiswa",
-      "SELECT COUNT(*) as active_loans FROM transaksi WHERE status_peminjaman = $1",
-      "SELECT COUNT(DISTINCT p.nama_prodi) as active_classes FROM prodi p JOIN mahasiswa m ON p.nama_prodi = m.nama_prodi JOIN transaksi t ON m.nim = t.nim WHERE t.status_peminjaman IN ($1)",
-    ];
+    try {
+      const queries = [
+        "SELECT COUNT(*) as total_classes FROM prodi",
+        "SELECT COUNT(*) as total_students FROM mahasiswa",
+        "SELECT COUNT(*) as active_loans FROM transaksi WHERE status_peminjaman = 'dipinjam'",
+        "SELECT COUNT(DISTINCT p.nama_prodi) as active_classes FROM prodi p JOIN mahasiswa m ON p.nama_prodi = m.nama_prodi JOIN transaksi t ON m.nim = t.nim WHERE t.status_peminjaman = 'dipinjam'",
+      ];
 
-    const [result1, result2, result3, result4] = await Promise.all([
-      pool.query(queries[0]),
-      pool.query(queries[1], ["dipinjam"]),
-      pool.query(queries[2], ["dipinjam"]),
-      pool.query(queries[3], ["dipinjam"]),
-    ]);
+      const [result1, result2, result3, result4] = await Promise.all([
+        pool.query(queries[0]),
+        pool.query(queries[1]),
+        pool.query(queries[2]),
+        pool.query(queries[3]),
+      ]);
 
-    return {
-      total_classes: result1.rows[0].total_classes,
-      total_students: result2.rows[0].total_students,
-      active_loans: result3.rows[0].active_loans,
-      active_classes: result4.rows[0].active_classes,
-    };
+      return {
+        total_classes: parseInt(result1.rows[0].total_classes) || 0,
+        total_students: parseInt(result2.rows[0].total_students) || 0,
+        active_loans: parseInt(result3.rows[0].active_loans) || 0,
+        active_classes: parseInt(result4.rows[0].active_classes) || 0,
+      };
+    } catch (error) {
+      console.error("Error in getClassOverview:", error);
+      throw error;
+    }
   }
 
   static async getClassesTable(limit = 10, offset = 0) {
@@ -359,7 +369,7 @@ class AdminService {
         );
       }
 
-      const connection = await pool.connect();
+      const client = await pool.connect();
       const results = {
         total_processed: parsedStudents.length,
         succesful_imports: 0,
@@ -369,7 +379,7 @@ class AdminService {
       };
 
       try {
-        await connection.beginTransaction();
+        await client.query("BEGIN");
         for (const student of parsedStudents) {
           try {
             if (!/^\d+$/.test(student.nim)) {
@@ -382,7 +392,7 @@ class AdminService {
               continue;
             }
 
-            const existingResult = await connection.query(
+            const existingResult = await client.query(
               "SELECT nim FROM mahasiswa WHERE nim = $1",
               [student.nim]
             );
@@ -408,7 +418,7 @@ class AdminService {
               results.failed_imports++;
               continue;
             }
-            await connection.query(
+            await client.query(
               "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi, mahasiswa_aktif) VALUES ($1,$2,$3,$4)",
               [student.nim, student.name.trim(), finalNamaProdi, true]
             );
@@ -429,12 +439,12 @@ class AdminService {
           }
         }
 
-        await connection.commit();
+        await client.query("COMMIT");
       } catch (error) {
-        await connection.rollback();
+        await client.query("ROLLBACK");
         throw error;
       } finally {
-        connection.release();
+        client.release();
       }
       return results;
     } catch (error) {
@@ -665,10 +675,11 @@ class AdminService {
       (b) => b.number_of_times_borrowing > 0
     );
     const totalBorrowers = borrowersWithLoans.length;
-    const activeBorrowers = borrowersWithLoans.filter(
+    const activeBorrowersArray = borrowersWithLoans.filter(
       (b) => b.active_loans > 0
     );
-    const completedBorrowers = totalBorrowers - activeBorrowers;
+    const activeBorrowersCount = activeBorrowersArray.length;
+    const completedBorrowers = totalBorrowers - activeBorrowersCount;
 
     return {
       class_info: {
@@ -677,14 +688,16 @@ class AdminService {
           prodiInfo.rows[0].lecturer ||
           scheduleInfo.rows[0]?.lecturers ||
           "N/A",
-        rooms: prodiInfo.rows[0].room || scheduleInfo.rows[0].rooms || "N/A",
+        rooms: prodiInfo.rows[0].room || scheduleInfo.rows[0]?.rooms || "N/A",
         schedules:
-          prodiInfo.rows[0].schedule || scheduleInfo.rows[0].schedules || "N/A",
+          prodiInfo.rows[0].schedule ||
+          scheduleInfo.rows[0]?.schedules ||
+          "N/A",
       },
       borrowers: borrowers.rows,
       statistics: {
         total_borrowers: totalBorrowers,
-        active_borrowers: activeBorrowers,
+        active_borrowers: activeBorrowersCount,
         completed_borrowers: completedBorrowers,
       },
     };

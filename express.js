@@ -20,7 +20,11 @@ const io = new SocketIOServer(server, {
             "https://lending-system-frontend.vercel.app",
             "https://lending-system-frontend.vercel.app/",
           ]
-        : ["http://localhost:5173", "http://localhost:3000"],
+        : [
+            "http://localhost:5173",
+            "http://localhost:3000",
+            "http://localhost:3000",
+          ],
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true,
   },
@@ -38,7 +42,11 @@ app.use(
             "https://lending-system-frontend.vercel.app",
             "https://lending-system-frontend.vercel.app/",
           ]
-        : ["http://localhost:5173", "http://localhost:3000"],
+        : [
+            "http://localhost:5173",
+            "http://localhost:3000",
+            "http://localhost:3000",
+          ],
     credentials: true,
   })
 );
