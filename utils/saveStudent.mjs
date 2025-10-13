@@ -1,4 +1,4 @@
-import pool from "../data/db_setting.js";
+import pool from "../data/db_postgres.js";
 
 function standardizeProdiName(className) {
   const mapping = {

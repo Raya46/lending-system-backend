@@ -1,4 +1,4 @@
-import pool from "../data/db_setting.js";
+import pool from "../data/db_postgres.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import xlsx from "xlsx";
@@ -9,7 +9,7 @@ import {
 } from "../utils/excelParser.mjs";
 class AdminService {
   static async extractAcademicYear(nim) {
-    if (nim || nim.length < 2) return null;
+    if (!nim || nim.length < 2) return null;
     const yearPrefix = nim.substring(0, 2);
     const currentYear = new Date().getFullYear();
     const currentCentury = Math.floor(currentYear / 100) * 100;
@@ -24,15 +24,15 @@ class AdminService {
   }
   // function untuk login admin
   static async login(username, password) {
-    const [users] = await pool.execute(
-      "SELECT * FROM admin_users WHERE username = ?",
+    const result = await pool.query(
+      "SELECT * FROM admin_users WHERE username = $1",
       [username]
     );
 
-    if (users.length === 0) {
+    if (result.rows.length === 0) {
       throw new Error("Username tidak ditemukan");
     }
-    const user = users[0];
+    const user = result.rows[0];
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
     if (!isPasswordValid) {
@@ -73,18 +73,18 @@ class AdminService {
     LIMIT 10
     `;
 
-    const [rows] = await pool.execute(query);
+    const result = await pool.query(query);
 
     const itemsWithRemaining = await Promise.all(
-      rows.map(async (item) => {
-        const [remainingQuery] = await pool.execute(
-          'SELECT COUNT(*) as remaining FROM inventory WHERE tipe_nama_barang = ? AND status = "tersedia"',
-          [item.name]
+      result.rows.map(async (item) => {
+        const remainingResult = await pool.query(
+          "SELECT COUNT(*) as remaining FROM inventory WHERE tipe_nama_barang = $1 AND status = $2",
+          [item.name, "tersedia"]
         );
         return {
           name: item.name,
           lentQuantity: item.lent_quantity,
-          remainingQuantity: remainingQuery[0].remaining || 0,
+          remainingQuantity: remainingResult.rows[0].remaining || 0,
         };
       })
     );
@@ -105,8 +105,8 @@ class AdminService {
     LIMIT 10
     `;
 
-    const [rows] = await pool.execute(query);
-    return rows.map((item) => ({
+    const result = await pool.query(query);
+    return result.rows.map((item) => ({
       name: item.name,
       remainingQuantity: item.remainingQuantity,
       status: item.remaining_quantity <= 5 ? "Critical" : "Low",
@@ -114,23 +114,23 @@ class AdminService {
   }
 
   static async getInventorySummary() {
-    const [summary] = await pool.execute(`
-      SELECT 
+    const result = await pool.query(`
+      SELECT
         COUNT(CASE WHEN status = 'tersedia' THEN 1 END) as quantity_in_hand,
         COUNT(CASE WHEN status IN ('dipinjam','diperbaiki') THEN 1 END) as to_be_received
       FROM inventory
       `);
 
     return {
-      quantityInHand: summary[0].quantity_in_hand,
-      toBeReceived: summary[0].to_be_received,
+      quantityInHand: result.rows[0].quantity_in_hand,
+      toBeReceived: result.rows[0].to_be_received,
     };
   }
 
   static async getInventoryData(limit = 10, offset = 0) {
     const queryCount = `SELECT COUNT (tipe_nama_barang) as total FROM inventory`;
-    const [countResult] = await pool.execute(queryCount);
-    const totalItems = countResult[0].total;
+    const countResult = await pool.query(queryCount);
+    const totalItems = countResult.rows[0].total;
     const query = `
     SELECT 
       i.tipe_nama_barang as item,
@@ -147,12 +147,12 @@ class AdminService {
     LEFT JOIN transaksi t ON i.id_barang = t.id_barang
     GROUP BY i.tipe_nama_barang
     ORDER BY i.tipe_nama_barang
-    LIMIT ? OFFSET ?
+    LIMIT $1 OFFSET $2
     `;
 
-    const [rows] = await pool.execute(query, [limit, offset]);
+    const result = await pool.query(query, [limit, offset]);
 
-    const data = rows.map((item) => ({
+    const data = result.rows.map((item) => ({
       ...item,
       lentQuantity: `${item.lent_quantity} Pieces`,
       remainingQuantity: `${item.remaining_quantity} Pieces`,
@@ -171,25 +171,29 @@ class AdminService {
     const queries = [
       "SELECT COUNT(*) as total_classes FROM prodi",
       "SELECT COUNT(*) as total_students FROM mahasiswa",
-      'SELECT COUNT(*) as active_loans FROM transaksi WHERE status_peminjaman = "dipinjam"',
-      'SELECT COUNT(DISTINCT p.nama_prodi) as active_classes FROM prodi p JOIN mahasiswa m ON p.nama_prodi = m.nama_prodi JOIN transaksi t ON m.nim = t.nim WHERE t.status_peminjaman IN ("dipinjam")',
+      "SELECT COUNT(*) as active_loans FROM transaksi WHERE status_peminjaman = $1",
+      "SELECT COUNT(DISTINCT p.nama_prodi) as active_classes FROM prodi p JOIN mahasiswa m ON p.nama_prodi = m.nama_prodi JOIN transaksi t ON m.nim = t.nim WHERE t.status_peminjaman IN ($1)",
     ];
 
-    const results = await Promise.all(
-      queries.map((query) => pool.execute(query))
-    );
+    const [result1, result2, result3, result4] = await Promise.all([
+      pool.query(queries[0]),
+      pool.query(queries[1], ["dipinjam"]),
+      pool.query(queries[2], ["dipinjam"]),
+      pool.query(queries[3], ["dipinjam"]),
+    ]);
+
     return {
-      total_classes: results[0][0][0].total_classes,
-      total_students: results[1][0][0].total_students,
-      active_loans: results[2][0][0].active_loans,
-      active_classes: results[3][0][0].active_classes,
+      total_classes: result1.rows[0].total_classes,
+      total_students: result2.rows[0].total_students,
+      active_loans: result3.rows[0].active_loans,
+      active_classes: result4.rows[0].active_classes,
     };
   }
 
   static async getClassesTable(limit = 10, offset = 0) {
     const countQuery = `SELECT COUNT(*) as total FROM prodi`;
-    const [countResult] = await pool.execute(countQuery);
-    const total = countResult[0].total;
+    const countResult = await pool.query(countQuery);
+    const total = countResult.rows[0].total;
     const query = `
     SELECT
     p.nama_prodi as class_name,
@@ -205,11 +209,11 @@ class AdminService {
         AND t.status_peminjaman = 'dipinjam'
     GROUP BY p.nama_prodi
     ORDER BY p.nama_prodi ASC
-    LIMIT ? OFFSET ?
+    LIMIT $1 OFFSET $2
     `;
-    const [rows] = await pool.execute(query, [limit, offset]);
+    const result = await pool.query(query, [limit, offset]);
     return {
-      data: rows,
+      data: result.rows,
       total: total,
     };
   }
@@ -217,27 +221,27 @@ class AdminService {
   static async createMahasiswa(mahasiswaData) {
     const { nim, nama_mahasiswa, nama_prodi } = mahasiswaData;
 
-    const [existing] = await pool.execute(
-      "SELECT nim FROM mahasiswa WHERE nim = ?",
+    const existingResult = await pool.query(
+      "SELECT nim FROM mahasiswa WHERE nim = $1",
       [nim]
     );
 
-    if (existing.length > 0) {
+    if (existingResult.rows.length > 0) {
       throw new Error("NIM sudah terdaftar");
     }
 
-    const [prodiCheck] = await pool.execute(
-      "SELECT nama_prodi FROM prodi WHERE nama_prodi = ?",
+    const prodiCheckResult = await pool.query(
+      "SELECT nama_prodi FROM prodi WHERE nama_prodi = $1",
       [nama_prodi]
     );
 
-    if (prodiCheck.length === 0) {
+    if (prodiCheckResult.rows.length === 0) {
       throw new Error("Program studi tidak ditemukan");
     }
 
-    await pool.execute(
-      "INSERT INTO mahasiwa (nim,nama_mahasiwa,nama_prodi,mahasiswa_aktif) VALUES (?,?,?,1)",
-      [nim, nama_mahasiswa, nama_prodi]
+    await pool.query(
+      "INSERT INTO mahasiswa (nim,nama_mahasiswa,nama_prodi,mahasiswa_aktif) VALUES ($1,$2,$3,$4)",
+      [nim, nama_mahasiswa, nama_prodi, true]
     );
 
     return {
@@ -247,17 +251,17 @@ class AdminService {
   }
 
   static async getMahasiswaByProgramStudy(nama_prodi, limit = 10, offset = 0) {
-    const [prodiCheck] = await pool.execute(
-      "SELECT nama_prodi FROM prodi WHERE nama_prodi = ?",
+    const prodiCheckResult = await pool.query(
+      "SELECT nama_prodi FROM prodi WHERE nama_prodi = $1",
       [nama_prodi]
     );
 
-    if (prodiCheck.length === 0) {
+    if (prodiCheckResult.rows.length === 0) {
       throw new Error("Program studi tidak ditemukan");
     }
 
     const query = `
-      SELECT 
+      SELECT
         m.nim,
         m.nama_mahasiswa,
         m.nama_prodi,
@@ -269,39 +273,39 @@ class AdminService {
       FROM mahasiswa m
       LEFT JOIN prodi p ON m.nama_prodi = p.nama_prodi
       LEFT JOIN transaksi t ON m.nim = t.nim
-      WHERE m.nama_prodi = ?
+      WHERE m.nama_prodi = $1
       GROUP BY m.nim, m.nama_mahasiswa, m.mahasiswa_aktif, m.created_at, p.kepanjangan_prodi
       ORDER BY m.nama_mahasiswa ASC
-      LIMIT ? OFFSET ?
+      LIMIT $2 OFFSET $3
     `;
 
-    const [rows] = await pool.execute(query, [nama_prodi, limit, offset]);
+    const result = await pool.query(query, [nama_prodi, limit, offset]);
     return {
-      programStudi: prodiCheck[0],
-      mahasiswa: rows,
-      total: rows.length,
+      programStudi: prodiCheckResult.rows[0],
+      mahasiswa: result.rows,
+      total: result.rows.length,
     };
   }
 
   static async updateMahasiswa(nim, mahasiswaData) {
     const { nama_mahasiswa, nama_prodi, mahasiswa_aktif } = mahasiswaData;
 
-    const [existing] = await pool.execute(
-      "SELECT nama_prodi FROM prodi WHERE nama_prodi = ?",
+    const existingResult = await pool.query(
+      "SELECT nama_prodi FROM prodi WHERE nama_prodi = $1",
       [nama_prodi]
     );
 
-    if (existing.length === 0) {
+    if (existingResult.rows.length === 0) {
       throw new Error("Mahasiswa tidak ditemukan");
     }
 
     if (nama_prodi) {
-      const [prodiCheck] = await pool.execute(
-        "SELECT nama_prodi FROM prodi WHERE nama_prodi = ?",
+      const prodiCheckResult = await pool.query(
+        "SELECT nama_prodi FROM prodi WHERE nama_prodi = $1",
         [nama_prodi]
       );
 
-      if (prodiCheck.length === 0) {
+      if (prodiCheckResult.rows.length === 0) {
         throw new Error("Program studi tidak ditemukan");
       }
     }
@@ -323,12 +327,12 @@ class AdminService {
     }
 
     const setUpdate = Object.keys(updateData)
-      .map((key) => `${key} = ?`)
+      .map((key, index) => `${key} = $${index + 1}`)
       .join(", ");
     params.push(...Object.values(updateData), nim);
 
-    await pool.execute(
-      `UPDATE mahasiswa SET ${setUpdate} WHERE nim = ?`,
+    await pool.query(
+      `UPDATE mahasiswa SET ${setUpdate} WHERE nim = $${params.length}`,
       params
     );
 
@@ -355,7 +359,7 @@ class AdminService {
         );
       }
 
-      const connection = await pool.getConnection();
+      const connection = await pool.connect();
       const results = {
         total_processed: parsedStudents.length,
         succesful_imports: 0,
@@ -378,12 +382,12 @@ class AdminService {
               continue;
             }
 
-            const [existing] = await connection.execute(
-              "SELECT nim FROM mahasiswa WHERE nim = ?",
+            const existingResult = await connection.query(
+              "SELECT nim FROM mahasiswa WHERE nim = $1",
               [student.nim]
             );
 
-            if (existing.length > 0) {
+            if (existingResult.rows.length > 0) {
               // skip duplicate nim
               results.failed_imports++;
               continue;
@@ -404,9 +408,9 @@ class AdminService {
               results.failed_imports++;
               continue;
             }
-            await connection.execute(
-              "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi, mahasiswa_aktif) VALUES (?,?,?,1)",
-              [student.nim, student.name.trim(), finalNamaProdi]
+            await connection.query(
+              "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi, mahasiswa_aktif) VALUES ($1,$2,$3,$4)",
+              [student.nim, student.name.trim(), finalNamaProdi, true]
             );
             results.succesful_imports++;
             results.imported_students.push({
@@ -440,13 +444,13 @@ class AdminService {
 
   static async getCurrentLoans() {
     const query = `
-    SELECT 
+    SELECT
       t.peminjaman_id,
       m.nama_mahasiswa,
       i.tipe_nama_barang,
       t.waktu_checkout,
       t.waktu_pengembalian_dijanjikan,
-      TIMESTAMPDIFF(DAY, NOW(), t.waktu_pengembalian_dijanjikan) as days_remaining
+      EXTRACT(DAY FROM (t.waktu_pengembalian_dijanjikan - NOW())) as days_remaining
       FROM transaksi t
       JOIN mahasiswa m ON t.nim = m.nim
       JOIN inventory i ON t.id_barang = i.id_barang
@@ -455,8 +459,8 @@ class AdminService {
       LIMIT 20
       `;
 
-    const [rows] = await pool.execute(query);
-    return rows;
+    const result = await pool.query(query);
+    return result.rows;
   }
 
   static async getAllBorrowTransactions(limit = 10, offset = 0) {
@@ -465,8 +469,8 @@ class AdminService {
     JOIN mahasiswa m ON t.nim = m.nim
     JOIN prodi p ON m.nama_prodi = p.nama_prodi`;
 
-    const [countResult] = await pool.execute(countQuery);
-    const total = countResult[0].total;
+    const countResult = await pool.query(countQuery);
+    const total = countResult.rows[0].total;
 
     const query = `
     SELECT 
@@ -497,11 +501,11 @@ class AdminService {
     LEFT JOIN dosen d ON j.nip = d.nip
     LEFT JOIN ruangan r ON j.id_ruangan = r.id_ruangan
     ORDER BY t.created_at ASC
-    LIMIT ? OFFSET ?
+    LIMIT $1 OFFSET $2
     `;
 
-    const [rows] = await pool.execute(query, [limit, offset]);
-    const data = rows.map((row) => {
+    const result = await pool.query(query, [limit, offset]);
+    const data = result.rows.map((row) => {
       const metadata = row.notes_checkout ? JSON.parse(row.notes_checkout) : {};
       return {
         ...row,
@@ -527,8 +531,8 @@ class AdminService {
     ORDER BY nama_kelas ASC
     `;
 
-    const [rows] = await pool.execute(query);
-    return rows;
+    const result = await pool.query(query);
+    return result.rows;
   }
   static async getAllRooms() {
     const query = `
@@ -540,8 +544,8 @@ class AdminService {
     ORDER BY nomor_ruangan ASC
     `;
 
-    const [rows] = await pool.execute(query);
-    return rows;
+    const result = await pool.query(query);
+    return result.rows;
   }
   static async getAllLecturers() {
     const query = `
@@ -553,8 +557,8 @@ class AdminService {
     ORDER BY nama_dosen ASC
     `;
 
-    const [rows] = await pool.execute(query);
-    return rows;
+    const result = await pool.query(query);
+    return result.rows;
   }
   static async getAllProgramStudies() {
     const query = `
@@ -566,8 +570,8 @@ class AdminService {
     ORDER BY nama_prodi ASC
     `;
 
-    const [rows] = await pool.execute(query);
-    return rows;
+    const result = await pool.query(query);
+    return result.rows;
   }
 
   static async getActiveSchedules() {
@@ -597,51 +601,51 @@ class AdminService {
       j.waktu_mulai ASC
     `;
 
-    const [rows] = await pool.execute(query);
-    return rows;
+    const result = await pool.query(query);
+    return result.rows;
   }
 
   static async getClassDetails(prodiName) {
-    const [prodiInfo] = await pool.execute(
-      "SELECT * FROM prodi WHERE nama_prodi = ?",
+    const prodiInfo = await pool.query(
+      "SELECT * FROM prodi WHERE nama_prodi = $1",
       [prodiName]
     );
 
-    if (prodiInfo.length === 0) {
+    if (prodiInfo.rows.length === 0) {
       return null;
     }
 
-    const [scheduleInfo] = await pool.execute(
+    const scheduleInfo = await pool.query(
       `
       SELECT
-        GROUP_CONCAT(DISTINCT d.nama_dosen SEPARATOR ', ') as lecturers,
-        GROUP_CONCAT(DISTINCT r.nomor_ruangan SEPARATOR ', ') as rooms,
-        GROUP_CONCAT(DISTINCT CONCAT(j.hari_dalam_seminggu, ' ', j.waktu_mulai, '-', j.waktu_berakhir) SEPARATOR '; ') as schedules
+        STRING_AGG(DISTINCT d.nama_dosen, ', ') as lecturers,
+        STRING_AGG(DISTINCT r.nomor_ruangan, ', ') as rooms,
+        STRING_AGG(DISTINCT CONCAT(j.hari_dalam_seminggu, ' ', j.waktu_mulai, '-', j.waktu_berakhir), '; ') as schedules
       FROM jadwal j
       LEFT JOIN dosen d ON j.nip = d.nip
       LEFT JOIN ruangan r ON j.id_ruangan = r.id_ruangan
-      WHERE j.nama_prodi = ?
+      WHERE j.nama_prodi = $1
       `,
       [prodiName]
     );
 
-    const [borrowers] = await pool.execute(
+    const borrowers = await pool.query(
       `
       SELECT
         m.nama_mahasiswa as student_name,
         m.nim,
         COUNT(t.peminjaman_id) as number_of_times_borrowing,
-        GROUP_CONCAT(
+        STRING_AGG(
           CASE WHEN t.status_peminjaman = 'dikembalikan' THEN
             CONCAT(i.tipe_nama_barang, ' - ', i.brand, ' ', i.model)
-          END SEPARATOR '; '
+          END, '; '
         ) as returned_items,
-        GROUP_CONCAT(
+        STRING_AGG(
           CASE WHEN t.status_peminjaman IN ('dipinjam','terlambat') THEN
             CONCAT(i.tipe_nama_barang, ' - ', i.brand, ' ', i.model)
-          END SEPARATOR '; '
+          END, '; '
         ) as unreturned_items,
-         CASE 
+         CASE
           WHEN COUNT(CASE WHEN t.status_peminjaman IN ('dipinjam', 'terlambat') THEN 1 END) > 0 THEN 'active_borrower'
           ELSE 'inactive_borrower'
         END as borrower_type,
@@ -650,14 +654,14 @@ class AdminService {
         FROM mahasiswa m
         LEFT JOIN transaksi t ON m.nim = t.nim
         LEFT JOIN inventory i ON t.id_barang = i.id_barang
-        WHERE m.nama_prodi = ?
+        WHERE m.nama_prodi = $1
         GROUP BY m.nim, m.nama_mahasiswa
         ORDER BY active_loans DESC, number_of_times_borrowing DESC, m.nama_mahasiswa ASC
       `,
       [prodiName]
     );
 
-    const borrowersWithLoans = borrowers.filter(
+    const borrowersWithLoans = borrowers.rows.filter(
       (b) => b.number_of_times_borrowing > 0
     );
     const totalBorrowers = borrowersWithLoans.length;
@@ -668,12 +672,16 @@ class AdminService {
 
     return {
       class_info: {
-        ...prodiInfo[0],
-        lecturers: prodiInfo[0].lecturer || scheduleInfo[0]?.lecturers || "N/A",
-        rooms: prodiInfo[0].room || scheduleInfo[0].rooms || "N/A",
-        schedules: prodiInfo[0].schedule || scheduleInfo[0].schedules || "N/A",
+        ...prodiInfo.rows[0],
+        lecturers:
+          prodiInfo.rows[0].lecturer ||
+          scheduleInfo.rows[0]?.lecturers ||
+          "N/A",
+        rooms: prodiInfo.rows[0].room || scheduleInfo.rows[0].rooms || "N/A",
+        schedules:
+          prodiInfo.rows[0].schedule || scheduleInfo.rows[0].schedules || "N/A",
       },
-      borrowers: borrowers,
+      borrowers: borrowers.rows,
       statistics: {
         total_borrowers: totalBorrowers,
         active_borrowers: activeBorrowers,

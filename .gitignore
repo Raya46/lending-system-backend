@@ -9,3 +9,16 @@
 
 # Environment variables file
 .env
+
+lending_system_db_test
+
+# Database files with sensitive user data
+postgres_schema.sql
+lending_system_db_test.sql
+migrate_data.js
+setup_postgres.js
+
+# Additional database migration files
+*.sql
+migrate_*.js
+setup_*.js

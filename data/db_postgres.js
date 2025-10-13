@@ -1,4 +1,8 @@
 import pg from "pg";
+import dotenv from "dotenv";
+
+// Load environment variables
+dotenv.config();
 
 // PostgreSQL connection configuration using Neon
 const pool = new pg.Pool({
@@ -22,5 +26,4 @@ async function testConnection() {
 // Test the connection
 testConnection();
 
-// Export the pool for use in other parts of your application
 export default pool;

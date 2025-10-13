@@ -6,7 +6,10 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon ./express.js",
-    "start": "node ./express.js"
+    "start": "node ./express.js",
+    "setup-postgres": "node ./setup_postgres.js",
+    "migrate-data": "node ./migrate_data.js",
+    "setup-full": "npm run setup-postgres && npm run migrate-data"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +26,7 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.1",
     "mysql2": "^3.14.1",
+    "pg": "^8.16.3",
     "socket.io": "^4.8.1",
     "xlsx": "^0.18.5"
   },

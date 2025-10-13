@@ -192,7 +192,7 @@ class AdminController {
       res.json({ success: true, data: loans });
     } catch (error) {
       res.status(500).json({
-        sucess: false,
+        success: false,
         message: "gagal mengambil data current loans",
         error: error.message,
       });
@@ -232,7 +232,7 @@ class AdminController {
       res.json({ success: true, data: classes });
     } catch (error) {
       res.status(500).json({
-        sucess: false,
+        success: false,
         message: "gagal mengambil data class",
         error: error.message,
       });
@@ -244,7 +244,7 @@ class AdminController {
       res.json({ success: true, data: rooms });
     } catch (error) {
       res.status(500).json({
-        sucess: false,
+        success: false,
         message: "gagal mengambil data rooms",
         error: error.message,
       });
@@ -256,7 +256,7 @@ class AdminController {
       res.json({ success: true, data: lecturers });
     } catch (error) {
       res.status(500).json({
-        sucess: false,
+        success: false,
         message: "gagal mengambil data Lecturers",
         error: error.message,
       });
@@ -268,7 +268,7 @@ class AdminController {
       res.json({ success: true, data: programStudies });
     } catch (error) {
       res.status(500).json({
-        sucess: false,
+        success: false,
         message: "gagal mengambil data ProgramStudies",
         error: error.message,
       });

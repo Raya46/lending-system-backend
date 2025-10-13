@@ -1,4 +1,5 @@
-import pool from "../data/db_setting.js";
+import pool from "../data/db_postgres.js";
+
 import {
   autoRejectExpiredRequest,
   validateBorrowEligibility,
@@ -24,46 +25,46 @@ class BorrowService {
       waktu_pengembalian_dijanjikan
     );
 
-    const connection = await pool.getConnection();
+    const connection = await pool.connect();
 
     try {
       await connection.beginTransaction();
 
-      const [existingStudent] = await connection.execute(
-        "SELECT nim FROM mahasiswa WHERE nim = ?",
+      const existingStudent = await connection.query(
+        "SELECT nim FROM mahasiswa WHERE nim = $1",
         [nim_mahasiswa]
       );
 
-      if (existingStudent.length === 0) {
-        await connection.execute(
-          "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES (?,?,?)",
+      if (existingStudent.rows.length === 0) {
+        await connection.query(
+          "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES ($1,$2,$3)",
           [nim_mahasiswa, nama_mahasiswa, nama_prodi]
         );
       }
 
-      const [existingLecturer] = await connection.execute(
-        "SELECT nip FROM dosen WHERE nama_dosen = ?",
+      const existingLecturer = await connection.query(
+        "SELECT nip FROM dosen WHERE nama_dosen = $1",
         [nama_dosen]
       );
 
-      const lecturerNIP = existingLecturer[0].nip;
+      const lecturerNIP = existingLecturer.rows[0].nip;
 
-      const [existingClass] = await connection.execute(
-        "SELECT id_kelas FROM kelas WHERE nama_kelas = ?",
+      const existingClass = await connection.query(
+        "SELECT id_kelas FROM kelas WHERE nama_kelas = $1",
         [kelas]
       );
 
-      const classId = existingClass[0].id_kelas;
+      const classId = existingClass.rows[0].id_kelas;
 
-      const [pendingCheck] = await connection.execute(
+      const pendingCheck = await connection.query(
         `SELECT peminjaman_id FROM transaksi
-        WHERE nim = ? AND status_peminjaman IN ('pending','accepted')
+        WHERE nim = $1 AND status_peminjaman IN ('pending','accepted')
         AND waktu_pengembalian_dijanjikan > NOW()
         `,
         [nim_mahasiswa]
       );
 
-      if (pendingCheck.length > 0) {
+      if (pendingCheck.rows.length > 0) {
         throw new Error(
           "Anda masih memiliki permintaan pending yang belum selesai"
         );
@@ -83,10 +84,10 @@ class BorrowService {
         validation_passed: true,
       };
 
-      const [transactionResult] = await connection.execute(
+      const transactionResult = await connection.query(
         `INSERT INTO transaksi
             (nim,jadwal_id, id_barang, waktu_pengembalian_dijanjikan, status_peminjaman, notes_checkout, nama_prodi)
-            VALUES (?,?,?,?,'pending',?,?)`,
+            VALUES ($1,$2,$3,$4,'pending',$5,$6) RETURNING peminjaman_id`,
         [
           nim_mahasiswa,
           jadwal_id,
@@ -97,10 +98,10 @@ class BorrowService {
         ]
       );
 
-      const transactionId = transactionResult.insertId;
+      const transactionId = transactionResult.rows[0].peminjaman_id;
       await connection.commit();
 
-      const [requestDataResult] = await connection.execute(
+      const requestDataResult = await connection.query(
         `SELECT
             t.peminjaman_id,
             t.nim,
@@ -115,17 +116,17 @@ class BorrowService {
         JOIN mahasiswa m ON t.nim = m.nim
         JOIN prodi p ON m.nama_prodi = p.nama_prodi
         LEFT JOIN inventory i ON t.id_barang = i.id_barang
-        WHERE t.peminjaman_id = ?    
+        WHERE t.peminjaman_id = $1
         `,
         [transactionId]
       );
 
-      const metadata = JSON.parse(requestDataResult[0].notes_checkout);
+      const metadata = JSON.parse(requestDataResult.rows[0].notes_checkout);
       const completeRequestData = {
-        ...requestDataResult[0],
+        ...requestDataResult.rows[0],
         lecturer_name: metadata.lecturer_name,
         class_name: metadata.class_name,
-        expiry_time: requestDataResult[0].expires_at,
+        expiry_time: requestDataResult.rows[0].expires_at,
       };
 
       emitToAdmins("new_borrow_request", {
@@ -154,33 +155,33 @@ class BorrowService {
   }
 
   static async acceptBorrowRequest(transactionId, adminId) {
-    const connection = await pool.getConnection();
+    const connection = await pool.connect();
 
     try {
       await connection.beginTransaction();
 
-      const [transactionData] = await connection.execute(
+      const transactionData = await connection.query(
         `SELECT t.*, m.nama_mahasiswa
             FROM transaksi t
             JOIN mahasiswa m ON t.nim = m.nim
-            WHERE t.peminjaman_id = ? AND t.status_peminjaman = 'pending'`,
+            WHERE t.peminjaman_id = $1 AND t.status_peminjaman = 'pending'`,
         [transactionId]
       );
 
-      if (transactionData.length === 0) {
+      if (transactionData.rows.length === 0) {
         throw new Error("Transaksi tidak ditemukan atau sudah diproses");
       }
 
       const transaction = transactionData[0];
       const metadata = JSON.parse(transaction.notes_checkout);
 
-      await connection.execute(
+      await connection.query(
         `
         UPDATE transaksi
         SET status_peminjaman = 'accepted',
-            admin_id_checkout = ?,
-            notes_checkout = ?
-        WHERE peminjaman_id = ?
+            admin_id_checkout = $1,
+            notes_checkout = $2
+        WHERE peminjaman_id = $3
         `,
         [
           adminId,
@@ -228,15 +229,15 @@ class BorrowService {
   }
 
   static async processBarcodeScan(barcode) {
-    const [itemData] = await pool.execute(
+    const itemData = await pool.query(
       `
-        SELECT * FROM inventory 
-        WHERE barcode = ? AND status = 'tersedia'
+        SELECT * FROM inventory
+        WHERE barcode = $1 AND status = 'tersedia'
         `,
       [barcode]
     );
 
-    if (itemData.length === 0) {
+    if (itemData.rows.length === 0) {
       throw new Error("Barcode tidak ditemukan atau item tidak tersedia");
     }
     return itemData[0];
@@ -248,7 +249,7 @@ class BorrowService {
     itemId,
     waktuPengembalian
   ) {
-    const connection = await pool.getConnection();
+    const connection = await pool.connect();
 
     try {
       await connection.beginTransaction();
@@ -259,18 +260,18 @@ class BorrowService {
         .slice(0, 19)
         .replace("T", " ");
 
-      const [transactionData] = await connection.execute(
+      const transactionData = await connection.query(
         `SELECT t.*, m.nama_mahasiswa, p.nama_prodi
         FROM transaksi t
         JOIN mahasiswa m ON t.nim = m.nim
         JOIN prodi p ON m.nama_prodi = p.nama_prodi
-        WHERE t.peminjaman_id = ?
+        WHERE t.peminjaman_id = $1
             AND t.status_peminjaman = 'accepted'
         `,
         [transactionId]
       );
 
-      if (transactionData.length === 0) {
+      if (transactionData.rows.length === 0) {
         throw new Error(
           "Transaksi tidak ditemukan atau belum dalam status yang tepat"
         );
@@ -279,24 +280,24 @@ class BorrowService {
       const transaction = transactionData[0];
       const metadata = JSON.parse(transaction.notes_checkout);
 
-      const [itemCheck] = await connection.execute(
-        'SELECT status FROM inventory WHERE id_barang = ? AND status = "tersedia"',
-        [itemId]
+      const itemCheck = await connection.query(
+        "SELECT status FROM inventory WHERE id_barang = $1 AND status = $2",
+        [itemId, "tersedia"]
       );
 
-      if (itemCheck.length === 0) {
+      if (itemCheck.rows.length === 0) {
         throw new Error("Item tidak tersedia");
       }
 
-      await connection.execute(
+      await connection.query(
         `UPDATE transaksi
-        SET id_barang = ?,
-        admin_id_checkout = ?,
+        SET id_barang = $1,
+        admin_id_checkout = $2,
         waktu_checkout = NOW(),
-        waktu_pengembalian_dijanjikan = ?,
+        waktu_pengembalian_dijanjikan = $3,
         status_peminjaman = 'dipinjam',
-        notes_checkout = ?
-        WHERE peminjaman_id = ?
+        notes_checkout = $4
+        WHERE peminjaman_id = $5
         `,
         [
           itemId,
@@ -312,15 +313,15 @@ class BorrowService {
         ]
       );
 
-      await connection.execute(
-        'UPDATE inventory SET status = "dipinjam" WHERE id_barang = ?',
-        [itemId]
+      await connection.query(
+        "UPDATE inventory SET status = $1 WHERE id_barang = $2",
+        ["dipinjam", itemId]
       );
 
       await connection.commit();
 
-      const [completeData] = await connection.execute(
-        `SELECT 
+      const completeData = await connection.query(
+        `SELECT
             t.peminjaman_id,
             t.nim,
             m.nama_mahasiswa,
@@ -334,11 +335,11 @@ class BorrowService {
           FROM transaksi t
           JOIN mahasiswa m ON t.nim = m.nim
           JOIN inventory i ON t.id_barang = i.id_barang
-          WHERE t.peminjaman_id = ?`,
+          WHERE t.peminjaman_id = $1`,
         [transactionId]
       );
 
-      const completeTransactionData = completeData[0];
+      const completeTransactionData = completeData.rows[0];
       const transactionMetadata = JSON.parse(
         completeTransactionData.notes_checkout
       );
@@ -371,31 +372,31 @@ class BorrowService {
   }
 
   static async rejectBorrowRequest(transactionId, adminId, alasanPenolakan) {
-    const connection = await pool.getConnection();
+    const connection = await pool.connect();
 
     try {
       await connection.beginTransaction();
 
-      const [transactionDetails] = await connection.execute(
-        'SELECT nim, notes_checkout FROM transaksi WHERE peminjaman_id = ? AND status_peminjaman IN ("pending","accepted")',
-        [transactionId]
+      const transactionDetails = await connection.query(
+        "SELECT nim, notes_checkout FROM transaksi WHERE peminjaman_id = $1 AND status_peminjaman IN ($2,$3)",
+        [transactionId, "pending", "accepted"]
       );
 
-      if (transactionDetails.length === 0) {
+      if (transactionDetails.rows.length === 0) {
         throw new Error("Transaksi tidak ditemukan atau sudah diproses");
       }
 
       const transaction = transactionDetails[0];
       const metadata = JSON.parse(transaction.notes_checkout);
 
-      await connection.execute(
+      await connection.query(
         `
         UPDATE transaksi
         SET status_peminjaman = 'dikembalikan',
-        admin_id_checkin = ?,
+        admin_id_checkin = $1,
         waktu_pengembalian_sebenarnya = NOW(),
-        notes_checkin = ?
-        WHERE peminjaman_id = ?       
+        notes_checkin = $2
+        WHERE peminjaman_id = $3
         `,
         [adminId, `Ditolaj oleh admin: ${alasanPenolakan}`, transactionId]
       );
@@ -419,22 +420,22 @@ class BorrowService {
   }
 
   static async getUserBorrowStatus(nim) {
-    const [pendingTransactions] = await pool.execute(
+    const pendingTransactions = await pool.query(
       `
-        SELECT 
+        SELECT
             'pending' as status,
             peminjaman_id as id,
             notes_checkout,
             waktu_pengembalian_dijanjikan as expiry_time,
             created_at as timestamp,
-            TIMESTAMPDIFF(SECOND, NOW(), waktu_pengembalian_dijanjikan) as seconds_remaining
+            EXTRACT(EPOCH FROM (waktu_pengembalian_dijanjikan - NOW())) as seconds_remaining
         FROM transaksi
-        WHERE nim = ? AND status_peminjaman = 'pending' AND waktu_pengembalian_dijanjikan > NOW()
+        WHERE nim = $1 AND status_peminjaman = 'pending' AND waktu_pengembalian_dijanjikan > NOW()
         `,
       [nim]
     );
 
-    const [acceptedTransactions] = await pool.execute(
+    const acceptedTransactions = await pool.query(
       `
         SELECT
             'accepted' as status,
@@ -442,14 +443,14 @@ class BorrowService {
             notes_checkout,
             waktu_pengembalian_dijanjikan as expiry_time,
             created_at as timestamp,
-            TIMESTAMPDIFF(SECOND, NOW(), waktu_pengembalian_dijanjikan) as seconds_remaining
+            EXTRACT(EPOCH FROM (waktu_pengembalian_dijanjikan - NOW())) as seconds_remaining
         FROM transaksi
-        WHERE nim = ? AND status_peminjaman = 'accepted' AND waktu_pengembalian_dijanjikan > NOW()
+        WHERE nim = $1 AND status_peminjaman = 'accepted' AND waktu_pengembalian_dijanjikan > NOW()
         `,
       [nim]
     );
 
-    const [activeTransactions] = await pool.execute(
+    const activeTransactions = await pool.query(
       `
         SELECT
             status_peminjaman as status,
@@ -462,7 +463,7 @@ class BorrowService {
             notes_checkout
         FROM transaksi t
         LEFT JOIN inventory i ON t.id_barang = i.id_barang
-        WHERE t.nim = ? AND t.status_peminjaman ('dipinjam','terlambat')
+        WHERE t.nim = $1 AND t.status_peminjaman IN ('dipinjam','terlambat')
         `,
       [nim]
     );
@@ -470,9 +471,9 @@ class BorrowService {
     const results = [];
 
     [
-      ...pendingTransactions,
-      ...acceptedTransactions,
-      ...activeTransactions,
+      ...pendingTransactions.rows,
+      ...acceptedTransactions.rows,
+      ...activeTransactions.rows,
     ].forEach((transaction) => {
       const metadata = JSON.parse(transaction.notes_checkout || "{}");
       results.push({
@@ -504,9 +505,9 @@ class BorrowService {
     ORDER BY t.created_at ASC
     `;
 
-    const [rows] = await pool.execute(query);
+    const result = await pool.query(query);
 
-    return rows
+    return result.rows
       .map((row) => {
         const metadata = JSON.parse(row.notes_checkout || "{}");
         const countDownExpiry = new Date(metadata.countdown_expiry);
@@ -541,42 +542,42 @@ class BorrowService {
       admin_id,
     } = requestData;
 
-    const connection = await pool.getConnection();
+    const connection = await pool.connect();
 
     try {
       await connection.beginTransaction();
 
-      const [existingStudent] = await connection.execute(
-        "SELECT nim FROM mahasiswa WHERE nim = ?",
+      const existingStudent = await connection.query(
+        "SELECT nim FROM mahasiswa WHERE nim = $1",
         [nim_mahasiswa]
       );
 
-      if (existingStudent.length === 0) {
-        await connection.execute(
-          "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES (?,?,?)",
+      if (existingStudent.rows.length === 0) {
+        await connection.query(
+          "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES ($1,$2,$3)",
           [nim_mahasiswa, nama_mahasiswa, nama_prodi]
         );
       }
 
-      const [existingLecturer] = await connection.execute(
-        "SELECT nip FROM dosen WHERE nama_dosen = ?",
+      const existingLecturer = await connection.query(
+        "SELECT nip FROM dosen WHERE nama_dosen = $1",
         [nama_dosen]
       );
 
-      const lecturerNIP = existingLecturer[0].nip;
+      const lecturerNIP = existingLecturer.rows[0].nip;
 
-      const [existingClass] = await connection.execute(
-        "SELECT id_kelas FROM kelas WHERE nama_kelas = ?",
+      const existingClass = await connection.query(
+        "SELECT id_kelas FROM kelas WHERE nama_kelas = $1",
         [kelas]
       );
 
-      const classId = existingClass[0].id_kelas;
+      const classId = existingClass.rows[0].id_kelas;
 
-      const [itemCheck] = await connection.execute(
-        'SELECT status FROM inventory WHERE id_barang = ? AND status = "tersedia"',
-        [id_barang]
+      const itemCheck = await connection.query(
+        "SELECT status FROM inventory WHERE id_barang = $1 AND status = $2",
+        [id_barang, "tersedia"]
       );
-      if (itemCheck.length === 0) {
+      if (itemCheck.rows.length === 0) {
         throw new Error("Item tidak tersedia");
       }
 
@@ -596,10 +597,10 @@ class BorrowService {
         lending_admin: admin_id,
       };
 
-      const [transactionResult] = await connection.execute(
+      const transactionResult = await connection.query(
         `INSERT INTO transaksi
             (nim,jadwal_id, id_barang, waktu_checkout, waktu_pengembalian_dijanjikan, status_peminjaman, admin_id_checkout,notes_checkout, nama_prodi)
-            VALUES (?,?,?,NOW(),?,'dipinjam',?,?,?)`,
+            VALUES ($1,$2,$3,NOW(),$4,'dipinjam',$5,$6,$7) RETURNING peminjaman_id`,
         [
           nim_mahasiswa,
           jadwal_id,
@@ -611,14 +612,14 @@ class BorrowService {
         ]
       );
 
-      const transactionId = transactionResult.insertId;
-      await connection.execute(
-        'UPDATE inventory SET status = "dipinjam" WHERE id_barang = ?',
-        [id_barang]
+      const transactionId = transactionResult.rows[0].peminjaman_id;
+      await connection.query(
+        "UPDATE inventory SET status = $1 WHERE id_barang = $2",
+        ["dipinjam", id_barang]
       );
       await connection.commit();
 
-      const [completeData] = await connection.execute(
+      const completeData = await connection.query(
         `SELECT
             t.peminjaman_id,
             t.nim,
@@ -633,12 +634,12 @@ class BorrowService {
         FROM transaksi t
         JOIN mahasiswa m ON t.nim = m.nim
         JOIN inventory i ON t.id_barang = i.id_barang
-        WHERE t.peminjaman_id = ?    
+        WHERE t.peminjaman_id = $1
         `,
         [transactionId]
       );
 
-      const completeTransactionData = completeData[0];
+      const completeTransactionData = completeData.rows[0];
       const transactionMetadata = JSON.parse(
         completeTransactionData.notes_checkout
       );
