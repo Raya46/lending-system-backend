@@ -7,7 +7,10 @@ import adminRoutes from "./routes/adminRoutes.js";
 import borrowRoutes from "./routes/borrowRoutes.js";
 import inventoryRoutes from "./routes/inventoryRoutes.js";
 import { initializeSocket } from "./services/socketService.js";
-import { autoRejectExpiredRequest } from "./utils/borrowUtils.js";
+import {
+  autoRejectAllExpiredRequests,
+  updateOverdueItems,
+} from "./utils/borrowUtils.js";
 
 dotenv.config();
 const app = express();
@@ -29,11 +32,12 @@ app.use("/api/borrow", borrowRoutes);
 
 setInterval(async () => {
   try {
-    await autoRejectExpiredRequest();
+    await updateOverdueItems();
+    await autoRejectAllExpiredRequests();
   } catch (error) {
-    console.error("Error running function");
+    console.error("Error running overdue items update job:", error);
   }
-}, 15 * 60 * 1000);
+}, 10 * 60 * 1000);
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });

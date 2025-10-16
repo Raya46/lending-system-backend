@@ -66,20 +66,35 @@ class InventoryController {
 
   static async updateItem(req, res) {
     try {
-      const itemId = req.params.id;
-      const itemData = req.body;
-      const itemUpdated = await InventoryService.updateItem(itemId, itemData);
-      res.json({
+      console.log("Controller updateItem - ID:", req.params.id);
+      console.log("Controller updateItem - Body:", req.body);
+
+      const updated = await InventoryService.updateItem(
+        req.params.id,
+        req.body
+      );
+
+      console.log("Controller updateItem - Updated:", updated);
+
+      if (!updated) {
+        return res.status(404).json({
+          success: false,
+          message: "tidak ditemukan",
+        });
+      }
+
+      return res.json({
         success: true,
-        message: "Item berhasil di update",
-        data: itemUpdated,
+        message: "Item berhasil diupdate",
       });
     } catch (error) {
-      res.json(400).json({
-        success: false,
-        message: "Gagal mengupdate item",
-        error: error.message,
-      });
+      if (!res.headersSent) {
+        return res.status(400).json({
+          success: false,
+          message: "Gagal update item",
+          error: error.message,
+        });
+      }
     }
   }
 
@@ -95,7 +110,7 @@ class InventoryController {
     } catch (error) {
       res.status(400).json({
         success: false,
-        message: "Gagal mengupdate item",
+        message: "Gagal delete item",
       });
     }
   }

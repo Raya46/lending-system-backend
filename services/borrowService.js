@@ -11,6 +11,7 @@ class BorrowService {
       nama_mahasiswa,
       nim_mahasiswa,
       nama_dosen,
+      nip_dosen,
       kelas,
       nama_prodi,
       jadwal_id,
@@ -18,49 +19,76 @@ class BorrowService {
       id_barang,
     } = requestData;
 
-    await validateBorrowEligibility(
-      nim_mahasiswa,
-      jadwal_id,
-      waktu_pengembalian_dijanjikan
-    );
+    let borrowerNIM, borrowerNIP, borrowerName, borrowerType;
+    if (nama_mahasiswa && nim_mahasiswa) {
+      borrowerType = "student";
+      borrowerNIM = nim_mahasiswa;
+      borrowerNIP = null;
+      borrowerName = nama_mahasiswa;
+    } else if (nama_dosen && nip_dosen) {
+      borrowerType = "lecturer";
+      borrowerNIM = null;
+      borrowerNIP = nip_dosen;
+      borrowerName = nama_dosen;
+    } else {
+      throw new Error("informasi peminjam tidak lengkap");
+    }
+
+    if (borrowerType === "student") {
+      await validateBorrowEligibility(
+        nim_mahasiswa,
+        jadwal_id,
+        waktu_pengembalian_dijanjikan
+      );
+    }
 
     const connection = await pool.getConnection();
 
     try {
       await connection.beginTransaction();
 
-      const [existingStudent] = await connection.execute(
-        "SELECT nim FROM mahasiswa WHERE nim = ?",
-        [nim_mahasiswa]
-      );
-
-      if (existingStudent.length === 0) {
-        await connection.execute(
-          "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES (?,?,?)",
-          [nim_mahasiswa, nama_mahasiswa, nama_prodi]
+      if (borrowerType === "student") {
+        const [existingStudent] = await connection.execute(
+          "SELECT nim FROM mahasiswa WHERE nim = ?",
+          [nim_mahasiswa]
         );
+
+        if (existingStudent.length === 0) {
+          await connection.execute(
+            "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES (?,?,?)",
+            [nim_mahasiswa, nama_mahasiswa, nama_prodi]
+          );
+        }
+      } else {
+        const [existingLecturer] = await connection.execute(
+          "SELECT nip FROM dosen WHERE nama_dosen = ?",
+          [nama_dosen]
+        );
+
+        if (existingLecturer.length === 0) {
+          throw new Error(`Dosen dengan NIP ${nip_dosen} tidak ditemukan`);
+        }
       }
 
-      const [existingLecturer] = await connection.execute(
-        "SELECT nip FROM dosen WHERE nama_dosen = ?",
-        [nama_dosen]
-      );
+      let pendingCheckQuery, pendingCheckParams;
 
-      const lecturerNIP = existingLecturer[0].nip;
-
-      const [existingClass] = await connection.execute(
-        "SELECT id_kelas FROM kelas WHERE nama_kelas = ?",
-        [kelas]
-      );
-
-      const classId = existingClass[0].id_kelas;
-
-      const [pendingCheck] = await connection.execute(
-        `SELECT peminjaman_id FROM transaksi
+      if (borrowerType === "student") {
+        pendingCheckQuery = `SELECT peminjaman_id FROM transaksi
         WHERE nim = ? AND status_peminjaman IN ('pending','accepted')
         AND waktu_pengembalian_dijanjikan > NOW()
-        `,
-        [nim_mahasiswa]
+        `;
+        pendingCheckParams = [borrowerNIM];
+      } else {
+        pendingCheckQuery = `SELECT peminjaman_id FROM transaksi
+        WHERE nip = ? AND status_peminjaman IN ('pending','accepted')
+        AND waktu_pengembalian_dijanjikan > NOW()
+        `;
+        pendingCheckParams = [borrowerNIP];
+      }
+
+      const [pendingCheck] = await connection.execute(
+        pendingCheckQuery,
+        pendingCheckParams
       );
 
       if (pendingCheck.length > 0) {
@@ -74,8 +102,11 @@ class BorrowService {
       countDownExpiry.setMinutes(countDownExpiry.getMinutes() + 15);
 
       const requestMetadata = {
+        borrower_type: borrowerType,
         lecturer_nip: lecturerNIP,
-        lecturer_name: nama_dosen,
+        lecturer_name: nama_dosen || null,
+        original_nim: borrowerType === "lecturer" ? nip_dosen : nim_mahasiswa,
+        original_name: borrowerName,
         class_name: kelas,
         countdown_expiry: countDownExpiry.toISOString(),
         actual_return_date: returnDateTime.toISOString(),
@@ -85,10 +116,11 @@ class BorrowService {
 
       const [transactionResult] = await connection.execute(
         `INSERT INTO transaksi
-            (nim,jadwal_id, id_barang, waktu_pengembalian_dijanjikan, status_peminjaman, notes_checkout, nama_prodi)
-            VALUES (?,?,?,?,'pending',?,?)`,
+            (nim, nip, jadwal_id, id_barang, waktu_pengembalian_dijanjikan, status_peminjaman, notes_checkout, nama_prodi)
+            VALUES (?,?,?,?,?,'pending',?,?)`,
         [
-          nim_mahasiswa,
+          borrowerNIM,
+          borrowerNIP,
           jadwal_id,
           id_barang,
           returnDateTime.toISOString().slice(0, 19).replace("T", " "),
@@ -100,11 +132,13 @@ class BorrowService {
       const transactionId = transactionResult.insertId;
       await connection.commit();
 
-      const [requestDataResult] = await connection.execute(
-        `SELECT
+      let requestDataQuery, requestDataJoin;
+
+      if (borrowerType === "student") {
+        requestDataQuery = `SELECT
             t.peminjaman_id,
             t.nim,
-            m.nama_mahasiswa,
+            m.nama_mahasiswa as nama_peminjam,
             p.nama_prodi,
             t.waktu_pengembalian_dijanjikan as expires_at,
             t.notes_checkout,
@@ -115,9 +149,30 @@ class BorrowService {
         JOIN mahasiswa m ON t.nim = m.nim
         JOIN prodi p ON m.nama_prodi = p.nama_prodi
         LEFT JOIN inventory i ON t.id_barang = i.id_barang
-        WHERE t.peminjaman_id = ?    
-        `,
-        [transactionId]
+        WHERE t.peminjaman_id = ? `;
+        requestDataJoin = [transactionId];
+      } else {
+        requestDataQuery = `SELECT
+            t.peminjaman_id,
+            t.nim,
+            d.nama_dosen as nama_peminjam,
+            p.nama_prodi,
+            t.waktu_pengembalian_dijanjikan as expires_at,
+            t.notes_checkout,
+            t.created_at,
+            i.tipe_nama_barang,
+            i.barcode
+        FROM transaksi t
+        JOIN dosen d ON t.nip = d.nip
+        JOIN prodi p ON m.nama_prodi = p.nama_prodi
+        LEFT JOIN inventory i ON t.id_barang = i.id_barang
+        WHERE t.peminjaman_id = ? `;
+        requestDataJoin = [transactionId];
+      }
+
+      const [requestDataResult] = await connection.execute(
+        requestDataQuery,
+        requestDataJoin
       );
 
       const metadata = JSON.parse(requestDataResult[0].notes_checkout);
@@ -159,13 +214,35 @@ class BorrowService {
     try {
       await connection.beginTransaction();
 
-      const [transactionData] = await connection.execute(
-        `SELECT t.*, m.nama_mahasiswa
-            FROM transaksi t
-            JOIN mahasiswa m ON t.nim = m.nim
-            WHERE t.peminjaman_id = ? AND t.status_peminjaman = 'pending'`,
+      let transactionQuery;
+      const metadataCheck = await connection.execute(
+        "SELECT notes_checkout FROM transaksi WHERE peminjaman_id = ?",
         [transactionId]
       );
+
+      if (metadataCheck.length > 0) {
+        const metadata = JSON.parse(metadataCheck[0].notes_checkout);
+        if (metadata.borrower_type === "lecturer") {
+          transactionQuery = `SELECT t.*,d.nama_dosen as nama_peminjam
+            FROM transaksi t
+            JOIN dosen d ON t.nip = d.nip
+            WHERE t.peminjaman_id = ? AND t.status_peminjaman = 'pending'`;
+        } else {
+          transactionQuery = `SELECT t.*, m.nama_mahasiswa as nama_peminjam
+            FROM transaksi t
+            JOIN mahasiswa m ON t.nim = m.nim
+            WHERE t.peminjaman_id = ? AND t.status_peminjaman = 'pending'`;
+        }
+      } else {
+        transactionQuery = `SELECT t.*, m.nama_mahasiswa as nama_peminjam
+            FROM transaksi t
+            JOIN mahasiswa m ON t.nim = m.nim
+            WHERE t.peminjaman_id = ? AND t.status_peminjaman = 'pending'`;
+      }
+
+      const [transactionData] = await connection.execute(transactionQuery, [
+        transactionId,
+      ]);
 
       if (transactionData.length === 0) {
         throw new Error("Transaksi tidak ditemukan atau sudah diproses");
@@ -197,21 +274,28 @@ class BorrowService {
 
       await connection.commit();
 
-      emitToStudent(transaction.nim, "borrow_accepted", {
+      const borrowerTypeMessageStudent =
+        metadata.borrower_type === "lecturer" ? "dosen" : "mahasiswa";
+      const borrowerIdentifier = transaction.nim || transaction.nip;
+
+      emitToStudent(borrowerIdentifier, "borrow_accepted", {
         transaction_id: transactionId,
-        message:
-          "Permintaan peminjaman Anda telah diterima! Admin akan memproses peminjaman.",
+        message: `Permintaan peminjaman Anda (${borrowerTypeMessageStudent}) telah diterima! Admin akan memproses peminjaman.`,
         lecturer_name: metadata.lecturer_name,
         class_name: metadata.class_name,
+        borrower_type: metadata.borrower_type,
         admin_id: adminId,
       });
 
+      const borrowerTypeMessageAdmin =
+        metadata.borrower_type === "lecturer" ? "dosen" : "mahasiswa";
+
       emitToAdmins("student_arrived", {
         transaction_id: transactionId,
-        student_name: transaction.nama_mahasiswa,
-        student_nim: transaction.nim,
-        message:
-          "Mahasiswa sudah tiba di meja admin. Silahkan scan barcode barang",
+        borrower_name: transaction.nama_mahasiswa,
+        borrower_nim: transaction.nim,
+        borrower_type: metadata.borrower_type,
+        message: `${borrowerTypeMessageAdmin} sudah tiba di meja admin. Silahkan scan barcode barang`,
         ready_for_barcode_scan: true,
       });
 
@@ -259,16 +343,44 @@ class BorrowService {
         .slice(0, 19)
         .replace("T", " ");
 
-      const [transactionData] = await connection.execute(
-        `SELECT t.*, m.nama_mahasiswa, p.nama_prodi
+      let transactionQuery;
+      const metadataCheck = await connection.execute(
+        "SELECT notes_checkout FROM transaksi WHERE peminjaman_id = ?",
+        [transactionId]
+      );
+
+      if (metadataCheck.length > 0) {
+        const metadata = JSON.parse(metadataCheck[0].notes_checkout);
+        if (metadata.borrower_type === "lecturer") {
+          transactionQuery = `SELECT t.*, d.nama_dosen as nama_peminjam, p.nama_prodi
+        FROM transaksi t
+        JOIN dosen d ON t.nip = d.nip
+        JOIN prodi p ON m.nama_prodi = p.nama_prodi
+        WHERE t.peminjaman_id = ?
+            AND t.status_peminjaman = 'accepted'
+        `;
+        } else {
+          transactionQuery = `SELECT t.*, m.nama_mahasiswa as nama_peminjam, p.nama_prodi
         FROM transaksi t
         JOIN mahasiswa m ON t.nim = m.nim
         JOIN prodi p ON m.nama_prodi = p.nama_prodi
         WHERE t.peminjaman_id = ?
             AND t.status_peminjaman = 'accepted'
-        `,
-        [transactionId]
-      );
+        `;
+        }
+      } else {
+        transactionQuery = `SELECT t.*, m.nama_mahasiswa as nama_peminjam, p.nama_prodi
+        FROM transaksi t
+        JOIN mahasiswa m ON t.nim = m.nim
+        JOIN prodi p ON m.nama_prodi = p.nama_prodi
+        WHERE t.peminjaman_id = ?
+            AND t.status_peminjaman = 'accepted'
+        `;
+      }
+
+      const [transactionData] = await connection.execute(transactionQuery, [
+        transactionId,
+      ]);
 
       if (transactionData.length === 0) {
         throw new Error(
@@ -319,11 +431,35 @@ class BorrowService {
 
       await connection.commit();
 
-      const [completeData] = await connection.execute(
-        `SELECT 
+      let completeDataQuery;
+      const completeMetadataCheck = await connection.execute(
+        "SELECT notes_checkout FROM transaksi WHERE peminjaman_id = ?",
+        [transactionId]
+      );
+
+      if (metadataCheck.length > 0) {
+        const metadata = JSON.parse(completeMetadataCheck[0].notes_checkout);
+        if (metadata.borrower_type === "lecturer") {
+          completeDataQuery = `SELECT 
+            t.peminjaman_id,
+            t.nip,
+            d.nama_dosen as nama_peminjam,
+            i.tipe_nama_barang,
+            i.brand,
+            i.model,
+            i.barcode,
+            t.waktu_checkout,
+            t.waktu_pengembalian_dijanjikan,
+            t.notes_checkout
+          FROM transaksi t
+          JOIN dosen d ON t.nip = d.nip
+          JOIN inventory i ON t.id_barang = i.id_barang
+          WHERE t.peminjaman_id = ?`;
+        } else {
+          completeDataQuery = `SELECT 
             t.peminjaman_id,
             t.nim,
-            m.nama_mahasiswa,
+            m.nama_mahasiswa as nama_peminjam,
             i.tipe_nama_barang,
             i.brand,
             i.model,
@@ -334,27 +470,55 @@ class BorrowService {
           FROM transaksi t
           JOIN mahasiswa m ON t.nim = m.nim
           JOIN inventory i ON t.id_barang = i.id_barang
-          WHERE t.peminjaman_id = ?`,
-        [transactionId]
-      );
+          WHERE t.peminjaman_id = ?`;
+        }
+      } else {
+        completeDataQuery = `SELECT 
+            t.peminjaman_id,
+            t.nim,
+            m.nama_mahasiswa as nama_peminjam,
+            i.tipe_nama_barang,
+            i.brand,
+            i.model,
+            i.barcode,
+            t.waktu_checkout,
+            t.waktu_pengembalian_dijanjikan,
+            t.notes_checkout
+          FROM transaksi t
+          JOIN mahasiswa m ON t.nim = m.nim
+          JOIN inventory i ON t.id_barang = i.id_barang
+          WHERE t.peminjaman_id = ?`;
+      }
+
+      const [completeData] = await connection.execute(completeDataQuery, [
+        transactionId,
+      ]);
 
       const completeTransactionData = completeData[0];
       const transactionMetadata = JSON.parse(
         completeTransactionData.notes_checkout
       );
 
-      emitToStudent(transaction.nim, "borrow_completed", {
+      const borrowerTypeMessage =
+        transactionMetadata.borrower_type === "lecturer"
+          ? "dosen"
+          : "mahasiswa";
+      const borrowerIdentifier =
+        completeTransactionData.nim || completeTransactionData.nip;
+      emitToStudent(borrowerIdentifier, "borrow_completed", {
         transaction: {
           ...completeTransactionData,
           lecturer_name: transactionMetadata.lecturer_name,
           class_name: transactionMetadata.class_name,
+          borrower_type: transactionMetadata.borrower_type,
         },
-        message: "Peminjaman berhasil diproses",
+        message: `Peminjaman berhasil diproses untuk ${borrowerTypeMessage}`,
       });
 
       emitToAdmins("request_processed", {
         transaction_id: transactionId,
         student_name: transaction.nama_mahasiswa,
+        borrower_type: transactionMetadata.borrower_type,
         item_name: completeTransactionData.tipe_nama_barang,
       });
 
@@ -377,7 +541,7 @@ class BorrowService {
       await connection.beginTransaction();
 
       const [transactionDetails] = await connection.execute(
-        'SELECT nim, notes_checkout FROM transaksi WHERE peminjaman_id = ? AND status_peminjaman IN ("pending","accepted")',
+        'SELECT nim, nip, notes_checkout FROM transaksi WHERE peminjaman_id = ? AND status_peminjaman IN ("pending","accepted")',
         [transactionId]
       );
 
@@ -402,11 +566,17 @@ class BorrowService {
 
       await connection.commit();
 
-      emitToStudent(transaction.nim, "borrow_rejected", {
+      const borrowerTypeMessage =
+        metadata.borrower_type === "lecturer" ? "dosen" : "mahasiswa";
+      const borrowerIdentifier = transaction.nim || transaction.nip;
+
+      emitToStudent(borrowerIdentifier, "borrow_rejected", {
         transaction_id: transactionId,
         alasan: alasanPenolakan,
         lecturer_name: metadata.lecturer_name,
         class_name: metadata.class_name,
+        borrower_type: metadata.borrower_type,
+        message: `Permintaan peminjaman ditolak untuk ${borrowerTypeMessage}`,
       });
 
       return true;
@@ -492,13 +662,15 @@ class BorrowService {
     SELECT 
         t.peminjaman_id,
         t.nim,
-        m.nama_mahasiswa,
+        t.nip,
+  COALESCE(m.nama_mahasiswa, d.nama_dosen) as nama_peminjam,
         p.nama_prodi,
         t.notes_checkout,
         t.created_at,
         t.status_peminjaman
     FROM transaksi t
-    JOIN mahasiswa m ON t.nim = m.nim
+   LEFT JOIN mahasiswa m ON t.nim = m.nim
+   LEFT JOIN dosen d ON t.nip = d.nip
     JOIN prodi p ON m.nama_prodi = p.nama_prodi
     WHERE t.status_peminjaman IN ('pending','accepted')
     ORDER BY t.created_at ASC
@@ -533,6 +705,7 @@ class BorrowService {
       nama_mahasiswa,
       nim_mahasiswa,
       nama_dosen,
+      nip_dosen,
       kelas,
       nama_prodi,
       jadwal_id,
@@ -546,31 +719,44 @@ class BorrowService {
     try {
       await connection.beginTransaction();
 
-      const [existingStudent] = await connection.execute(
-        "SELECT nim FROM mahasiswa WHERE nim = ?",
-        [nim_mahasiswa]
-      );
+      let borrowerNIM, borrowerName, borrowerType, borrowerNIP;
 
-      if (existingStudent.length === 0) {
-        await connection.execute(
-          "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES (?,?,?)",
-          [nim_mahasiswa, nama_mahasiswa, nama_prodi]
+      if (nama_mahasiswa && nim_mahasiswa) {
+        borrowerType = "student";
+        borrowerNIM = nim_mahasiswa;
+        borrowerName = nama_mahasiswa;
+        const [existingStudent] = await connection.execute(
+          "SELECT nim FROM mahasiswa WHERE nim = ?",
+          [nim_mahasiswa]
         );
+
+        if (existingStudent.length === 0) {
+          await connection.execute(
+            "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi) VALUES (?,?,?)",
+            [nim_mahasiswa, nama_mahasiswa, nama_prodi]
+          );
+        } else {
+          await connection.execute(
+            "UPDATE mahasiswa SET nama_mahasiswa = ?, nama_prodi = ? WHERE nim = ?",
+            [nama_mahasiswa, nama_prodi, nim_mahasiswa]
+          );
+        }
+      } else if (nama_dosen && nip_dosen) {
+        borrowerType = "lecturer";
+        borrowerNIM = nip_dosen;
+        borrowerName = nama_dosen;
+        const [existingLecturer] = await connection.execute(
+          "SELECT nip FROM dosen WHERE nama_dosen = ?",
+          [nama_dosen]
+        );
+
+        if (existingLecturer.length === 0) {
+          throw new Error(`
+            Dosen dengan NIP ${nip_dosen} tidak ditemukan`);
+        }
+      } else {
+        throw new Error("Informasi peminjam tidak lengkap");
       }
-
-      const [existingLecturer] = await connection.execute(
-        "SELECT nip FROM dosen WHERE nama_dosen = ?",
-        [nama_dosen]
-      );
-
-      const lecturerNIP = existingLecturer[0].nip;
-
-      const [existingClass] = await connection.execute(
-        "SELECT id_kelas FROM kelas WHERE nama_kelas = ?",
-        [kelas]
-      );
-
-      const classId = existingClass[0].id_kelas;
 
       const [itemCheck] = await connection.execute(
         'SELECT status FROM inventory WHERE id_barang = ? AND status = "tersedia"',
@@ -587,8 +773,11 @@ class BorrowService {
         .replace("T", " ");
 
       const requestMetadata = {
+        borrower_type: borrowerType,
         lecturer_nip: lecturerNIP,
-        lecturer_name: nama_dosen,
+        lecturer_name: nama_dosen || null,
+        original_nim: borrowerType === "lecturer" ? nip_dosen : nim_mahasiswa,
+        original_name: borrowerName,
         class_name: kelas,
         class_id: classId,
         direct_admin_lending: true,
@@ -598,10 +787,11 @@ class BorrowService {
 
       const [transactionResult] = await connection.execute(
         `INSERT INTO transaksi
-            (nim,jadwal_id, id_barang, waktu_checkout, waktu_pengembalian_dijanjikan, status_peminjaman, admin_id_checkout,notes_checkout, nama_prodi)
-            VALUES (?,?,?,NOW(),?,'dipinjam',?,?,?)`,
+            (nim, nip, jadwal_id, id_barang, waktu_checkout, waktu_pengembalian_dijanjikan, status_peminjaman, admin_id_checkout,notes_checkout, nama_prodi)
+            VALUES (?,?,?,?,NOW(),?,'dipinjam',?,?,?)`,
         [
-          nim_mahasiswa,
+          borrowerNIM,
+          borrowerNIP,
           jadwal_id,
           id_barang,
           mysqlDateTime,
@@ -618,11 +808,13 @@ class BorrowService {
       );
       await connection.commit();
 
-      const [completeData] = await connection.execute(
-        `SELECT
+      let completeDataQuery;
+
+      if (borrowerType === "lecturer") {
+        completeDataQuery = `SELECT
             t.peminjaman_id,
-            t.nim,
-            m.nama_mahasiswa,
+            t.nip,
+            d.nama_dosen as nama_peminjam,
             i.tipe_nama_barang,
             i.brand,
             i.model,
@@ -631,29 +823,55 @@ class BorrowService {
             t.waktu_pengembalian_dijanjikan,
             t.notes_checkout
         FROM transaksi t
-        JOIN mahasiswa m ON t.nim = m.nim
+        JOIN dosen d ON t.nip = d.nip
         JOIN inventory i ON t.id_barang = i.id_barang
         WHERE t.peminjaman_id = ?    
-        `,
-        [transactionId]
-      );
+        `;
+      } else {
+        completeDataQuery = `SELECT
+            t.peminjaman_id,
+            t.nim,
+            m.nama_mahasiswa as nama_peminjam,
+            i.tipe_nama_barang,
+            i.brand,
+            i.model,
+            i.barcode,
+            t.waktu_checkout,
+            t.waktu_pengembalian_dijanjikan,
+            t.notes_checkout
+        FROM transaksi t
+        JOIN mahasiswa m ON t.nip = m.nim
+        JOIN inventory i ON t.id_barang = i.id_barang
+        WHERE t.peminjaman_id = ?    
+        `;
+      }
 
+      const [completeData] = await connection.execute(completeDataQuery, [
+        transactionId,
+      ]);
       const completeTransactionData = completeData[0];
       const transactionMetadata = JSON.parse(
         completeTransactionData.notes_checkout
       );
 
-      emitToStudent(nim_mahasiswa, "direct_lending_completed", {
+      const borrowerIdentifier =
+        borrowerType === "lecturer" ? borrowerNIP : borrowerNIM;
+
+      emitToStudent(borrowerIdentifier, "direct_lending_completed", {
         transaction: {
           ...completeTransactionData,
           lecturer_name: transactionMetadata.lecturer_name,
           class_name: transactionMetadata.class_name,
         },
+        message: `Peminjaman langsung oleh admin berhasil untuk ${
+          borrowerType === "lecturer" ? "dosen" : "mahasiswa"
+        }`,
       });
 
       emitToAdmins("direct_lending_completed", {
         transaction_id: transactionId,
-        student_name: nama_mahasiswa,
+        borrower_name: borrowerName,
+        borrower_type: borrowerType,
         item_name: completeTransactionData.tipe_nama_barang,
         lending_admin: admin_id,
       });

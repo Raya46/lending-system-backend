@@ -4,24 +4,17 @@ import bcrypt from "bcryptjs";
 import xlsx from "xlsx";
 import {
   detectFileType,
+  parseBMM,
   parsePerColumn,
   parsePerSheet,
+  parseTL,
+  parseTOLI,
 } from "../utils/excelParser.mjs";
+import {
+  extractAcademicYear,
+  standardizeProdiName,
+} from "../utils/importUtils.js";
 class AdminService {
-  static async extractAcademicYear(nim) {
-    if (nim || nim.length < 2) return null;
-    const yearPrefix = nim.substring(0, 2);
-    const currentYear = new Date().getFullYear();
-    const currentCentury = Math.floor(currentYear / 100) * 100;
-
-    // convert 2-digit year to 4-digit year
-    let academicYear = currentCentury + parseInt(yearPrefix);
-
-    if (academicYear > currentYear) {
-      academicYear -= 100;
-    }
-    return `${academicYear}/${academicYear + 1}`;
-  }
   // function untuk login admin
   static async login(username, password) {
     const [users] = await pool.execute(
@@ -236,7 +229,7 @@ class AdminService {
     }
 
     await pool.execute(
-      "INSERT INTO mahasiwa (nim,nama_mahasiwa,nama_prodi,mahasiswa_aktif) VALUES (?,?,?,1)",
+      "INSERT INTO mahasiswa (nim,nama_mahasiswa,nama_prodi,mahasiswa_aktif) VALUES (?,?,?,1)",
       [nim, nama_mahasiswa, nama_prodi]
     );
 
@@ -338,42 +331,84 @@ class AdminService {
     };
   }
 
-  static async importMahasiswa(excelBuffer, nama_prodi) {
+  static async importMahasiswa(
+    excelBuffer,
+    nama_prodi = null,
+    templateType = null
+  ) {
     try {
       const workbook = xlsx.read(excelBuffer, { type: "buffer" });
       const fileType = detectFileType(workbook);
 
       let parsedStudents;
-      if (fileType == "perColumn") {
-        parsedStudents = parsePerColumn(workbook, null);
-      } else {
-        parsedStudents = parsePerSheet(workbook);
+      switch (fileType) {
+        case "bmm":
+          parsedStudents = parseBMM(workbook);
+          break;
+        case "toli":
+          parsedStudents = parseTOLI(workbook);
+          break;
+        case "tl":
+          parsedStudents = parseTL(workbook);
+        default:
+          if (fileType === "perColumn") {
+            parsedStudents = parsePerColumn(workbook, null);
+          } else {
+            parsedStudents = parsePerSheet(workbook);
+          }
+          break;
       }
+
       if (parsedStudents.length === 0) {
         throw new Error(
-          "Tidak ada data mahasiswa yang valid ditemukan dalam excel"
+          "Tidak ada data mahasiswa yang valid ditemukan di file ini"
         );
+      }
+
+      // group students by theri class group (prodi)
+      const studentsByProdi = {};
+
+      parsedStudents.forEach((student) => {
+        const stantardizedProdi = standardizeProdiName(
+          student.class_group || ""
+        );
+        if (!studentsByProdi[stantardizedProdi]) {
+          studentsByProdi[stantardizedProdi] = [];
+        }
+        studentsByProdi[stantardizedProdi].push(student);
+      });
+
+      let studentsToProcess = parsedStudents;
+      if (nama_prodi) {
+        const standardizedSelectedProdi = standardizeProdiName(nama_prodi);
+        studentsToProcess = studentsByProdi[standardizedSelectedProdi] || [];
+        if (studentsToProcess.length === 0) {
+          throw new Error(
+            `Tidak ada mahasiswa dari prodi ${standardizedSelectedProdi} yang ditemukan dalam file excel`
+          );
+        }
       }
 
       const connection = await pool.getConnection();
       const results = {
-        total_processed: parsedStudents.length,
-        succesful_imports: 0,
+        total_processed: studentsToProcess.length,
+        successful_imports: 0,
         failed_imports: 0,
-        erros: [],
+        errors: [],
         imported_students: [],
       };
 
       try {
         await connection.beginTransaction();
-        for (const student of parsedStudents) {
+        for (const student of studentsToProcess) {
           try {
             if (!/^\d+$/.test(student.nim)) {
-              results.erros.push({
+              results.errors.push({
                 nim: student.nim,
                 name: student.name,
                 error: "NIM harus berupa angka",
               });
+
               results.failed_imports++;
               continue;
             }
@@ -384,39 +419,71 @@ class AdminService {
             );
 
             if (existing.length > 0) {
-              // skip duplicate nim
               results.failed_imports++;
               continue;
             }
-            let finalNamaProdi = nama_prodi;
+            let finalNamaProdi = standardizeProdiName(
+              student.class_group || ""
+            );
 
             if (finalNamaProdi) {
               finalNamaProdi = finalNamaProdi.replace(/\s/g, "");
             }
 
-            const academicYear = AdminService.extractAcademicYear(student.nim);
-            if (!academicYear) {
-              results.erros.push({
+            if (!finalNamaProdi && nama_prodi) {
+              finalNamaProdi = standardizeProdiName(nama_prodi);
+              if (finalNamaProdi) {
+                finalNamaProdi = finalNamaProdi.replace(/\s/g, "");
+              }
+            }
+
+            if (!finalNamaProdi) {
+              results.errors.push({
                 nim: student.nim,
                 name: student.name,
-                error: "tidak dapat menentukan tahun dari nim",
+                error: "tidak dapat menentukan prodi mahasiswa",
               });
               results.failed_imports++;
               continue;
             }
+
+            const academicYear = extractAcademicYear(student.nim);
+            if (!academicYear) {
+              results.errors.push({
+                nim: student.nim,
+                name: student.name,
+                error: "tidak dapat menentukan tahun angkatan dari nim",
+              });
+              results.failed_imports++;
+              continue;
+            }
+
+            const [prodiCheck] = await connection.execute(
+              "SELECT nama_prodi FROM prodi WHERE nama_prodi = ?",
+              [finalNamaProdi]
+            );
+
+            if (prodiCheck.length === 0) {
+              await connection.execute(
+                "INSERT INTO prodi (nama_prodi, kepanjangan_prodi, tahun_angkatan) VALUES (?, ?, ?)",
+                [finalNamaProdi, finalNamaProdi, academicYear]
+              );
+            }
+
             await connection.execute(
-              "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi, mahasiswa_aktif) VALUES (?,?,?,1)",
+              "INSERT INTO mahasiswa (nim, nama_mahasiswa, nama_prodi, mahasiswa_aktif) VALUES (?, ?, ?, 1)",
               [student.nim, student.name.trim(), finalNamaProdi]
             );
-            results.succesful_imports++;
+
+            results.successful_imports++;
             results.imported_students.push({
               nim: student.nim,
-              name: student.name.trim(),
+              nama_mahasiswa: student.name.trim(),
               nama_prodi: finalNamaProdi,
               class_group: student.class_group,
             });
           } catch (error) {
-            results.erros.push({
+            results.errors.push({
               nim: student.nim,
               name: student.name,
               error: error.message,
@@ -496,7 +563,7 @@ class AdminService {
     LEFT JOIN kelas k ON j.id_kelas = k.id_kelas
     LEFT JOIN dosen d ON j.nip = d.nip
     LEFT JOIN ruangan r ON j.id_ruangan = r.id_ruangan
-    ORDER BY t.created_at ASC
+    ORDER BY t.created_at DESC
     LIMIT ? OFFSET ?
     `;
 

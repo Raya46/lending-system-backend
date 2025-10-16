@@ -331,23 +331,17 @@ class AdminController {
         });
       }
 
-      const { nama_prodi } = req.body;
-
-      if (!nama_prodi) {
-        return res.status(400).json({
-          success: false,
-          message: "Program studi harus dipilih",
-        });
-      }
+      const { nama_prodi, templateType } = req.body;
 
       const result = await AdminService.importMahasiswa(
         req.file.buffer,
-        nama_prodi
+        nama_prodi,
+        templateType
       );
 
       res.status(201).json({
         success: true,
-        message: `import selesai: ${result.succesful_imports} berhasil, ${result.failed_imports} gagal`,
+        message: `import selesai: ${result.successful_imports} berhasil, ${result.failed_imports} gagal`,
         data: result,
       });
     } catch (error) {
