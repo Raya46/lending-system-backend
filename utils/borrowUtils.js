@@ -63,6 +63,84 @@ export async function validateBorrowEligibility(
     };
   } catch (error) {
     console.log(error);
+    throw error; // Tambahkan ini untuk melempar error kembali
+  } finally {
+    connection.release();
+  }
+}
+
+export async function validateLecturerBorrowEligibility(
+  nip_dosen,
+  jadwal_id,
+  returnDate
+) {
+  const connection = await pool.getConnection();
+
+  try {
+    const [lecturerData] = await connection.execute(
+      "SELECT nama_dosen, prodi FROM dosen WHERE nip = ?",
+      [nip_dosen]
+    );
+
+    if (lecturerData.length === 0) {
+      throw new Error("Dosen tidak ditemukan");
+    }
+
+    const lecturerName = lecturerData[0].nama_dosen;
+    const lecturerProdi = lecturerData[0].prodi;
+
+    const [scheduleData] = await connection.execute(
+      `
+            SELECT
+                j.id_jadwal,
+                j.nama_prodi,
+                j.hari_dalam_seminggu,
+                j.waktu_mulai,
+                j.waktu_berakhir,
+                k.nama_kelas,
+                d.nama_dosen,
+                r.nomor_ruangan
+            FROM jadwal j
+            JOIN kelas k ON j.id_kelas = k.id_kelas
+            JOIN dosen d ON j.nip = d.nip
+            JOIN ruangan r ON j.id_ruangan = r.id_ruangan
+            WHERE j.id_jadwal = ?
+            `,
+      [jadwal_id]
+    );
+    if (scheduleData.length === 0) {
+      throw new Error("Jadwal yang dipilih tidak ditemukan");
+    }
+    const schedule = scheduleData[0];
+
+    // Validasi bahwa dosen mengajar di jadwal yang dipilih
+    if (schedule.nama_dosen !== lecturerName) {
+      throw new Error(
+        `Jadwal ini untuk dosen ${schedule.nama_dosen}, bukan untuk ${lecturerName}`
+      );
+    }
+
+    // Validasi program studi (jika dosen memiliki prodi)
+    if (lecturerProdi && schedule.nama_prodi !== lecturerProdi) {
+      throw new Error(
+        `Jadwal ini untuk program studi ${schedule.nama_prodi}, bukan untuk ${lecturerProdi}`
+      );
+    }
+
+    const returnDateTime = new Date(returnDate);
+    const now = new Date();
+
+    if (returnDateTime <= now) {
+      throw new Error("Waktu pengembalian harus di waktu selanjutnya");
+    }
+
+    return {
+      valid: true,
+      schedule: schedule,
+    };
+  } catch (error) {
+    console.log(error);
+    throw error;
   } finally {
     connection.release();
   }

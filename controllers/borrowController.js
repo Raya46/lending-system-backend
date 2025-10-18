@@ -90,11 +90,13 @@ class BorrowController {
         waktu_pengembalian
       );
 
-      res.json({
+      const response = {
         success: true,
         message: "Transaksi peminjaman berhasil diselesaikan",
         data: result,
-      });
+      };
+
+      res.json(response);
     } catch (error) {
       res.status(400).json({
         success: false,

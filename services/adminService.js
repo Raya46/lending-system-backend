@@ -509,13 +509,16 @@ class AdminService {
     const query = `
     SELECT 
       t.peminjaman_id,
-      m.nama_mahasiswa,
+      t.nim,
+      t.nip,
+      COALESCE(m.nama_mahasiswa, d.nama_dosen) as nama_peminjam,
       i.tipe_nama_barang,
       t.waktu_checkout,
       t.waktu_pengembalian_dijanjikan,
       TIMESTAMPDIFF(DAY, NOW(), t.waktu_pengembalian_dijanjikan) as days_remaining
       FROM transaksi t
-      JOIN mahasiswa m ON t.nim = m.nim
+      LEFT JOIN mahasiswa m ON t.nim = m.nim
+      LEFT JOIN dosen d ON t.nip = d.nip
       JOIN inventory i ON t.id_barang = i.id_barang
       WHERE t.status_peminjaman IN ('dipinjam','terlambat')
       ORDER BY t.waktu_checkout DESC
@@ -529,18 +532,20 @@ class AdminService {
   static async getAllBorrowTransactions(limit = 10, offset = 0) {
     const countQuery = `
     SELECT COUNT(*) as total FROM transaksi t
-    JOIN mahasiswa m ON t.nim = m.nim
-    JOIN prodi p ON m.nama_prodi = p.nama_prodi`;
+    LEFT JOIN mahasiswa m ON t.nim = m.nim
+    LEFT JOIN dosen d ON t.nip = d.nip
+    LEFT JOIN prodi p ON (m.nama_prodi = p.nama_prodi OR t.nama_prodi = p.nama_prodi)`;
 
     const [countResult] = await pool.execute(countQuery);
     const total = countResult[0].total;
 
     const query = `
-    SELECT 
+    SELECT
       t.peminjaman_id,
       t.nim,
-      m.nama_mahasiswa,
-      p.nama_prodi,
+      t.nip,
+      COALESCE(m.nama_mahasiswa, d.nama_dosen) as nama_peminjam,
+      COALESCE(m.nama_prodi, t.nama_prodi) as nama_prodi,
       i.barcode,
       i.tipe_nama_barang,
       i.brand,
@@ -556,12 +561,13 @@ class AdminService {
       t.notes_checkin,
       t.created_at
     FROM transaksi t
-    JOIN mahasiswa m ON t.nim = m.nim
-    JOIN prodi p ON m.nama_prodi = p.nama_prodi
+    LEFT JOIN mahasiswa m ON t.nim = m.nim
+    LEFT JOIN dosen d ON t.nip = d.nip
+    LEFT JOIN prodi p ON (m.nama_prodi = p.nama_prodi OR t.nama_prodi = p.nama_prodi)
     LEFT JOIN inventory i ON t.id_barang = i.id_barang
     LEFT JOIN jadwal j ON t.jadwal_id = j.id_jadwal
     LEFT JOIN kelas k ON j.id_kelas = k.id_kelas
-    LEFT JOIN dosen d ON j.nip = d.nip
+    LEFT JOIN dosen d2 ON j.nip = d2.nip
     LEFT JOIN ruangan r ON j.id_ruangan = r.id_ruangan
     ORDER BY t.created_at DESC
     LIMIT ? OFFSET ?
@@ -569,7 +575,22 @@ class AdminService {
 
     const [rows] = await pool.execute(query, [limit, offset]);
     const data = rows.map((row) => {
-      const metadata = row.notes_checkout ? JSON.parse(row.notes_checkout) : {};
+      // Tambahkan pengecekan untuk menghindari error jika notes_checkout undefined
+      let metadata = {};
+      if (row.notes_checkout) {
+        try {
+          metadata = JSON.parse(row.notes_checkout);
+        } catch (error) {
+          console.error(
+            "Error parsing notes_checkout:",
+            error,
+            "Row data:",
+            row
+          );
+          metadata = {};
+        }
+      }
+
       return {
         ...row,
         lecturer_name: metadata.lecturer_name || row.nama_dosen,

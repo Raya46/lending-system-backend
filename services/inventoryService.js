@@ -193,6 +193,7 @@ class InventoryService {
     const connection = await pool.getConnection();
 
     try {
+      await connection.beginTransaction();
       const [result] = await connection.execute(query, updateValues);
 
       // handle status change logic
@@ -209,7 +210,7 @@ class InventoryService {
             );
 
             await connection.execute(
-              'UPDATE transaksi SET status_peminjaman = "dikembalikan, waktu_pengembalian_sebenarnya = NOW(), notes_checkin = "Otomatis dikembalikan: Status item diubah menjadi tersedia" WHERE id_barang = ? AND status_peminjaman = "dipinjam"',
+              'UPDATE transaksi SET status_peminjaman = "dikembalikan", waktu_pengembalian_sebenarnya = NOW(), notes_checkin = "Otomatis dikembalikan: Status item diubah menjadi tersedia" WHERE id_barang = ? AND status_peminjaman = "dipinjam"',
               [id]
             );
           }

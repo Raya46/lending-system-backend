@@ -15,7 +15,7 @@ const authMiddleware = (req, res, next) => {
     req.admin = decoded;
     next();
   } catch (error) {
-    res.status(401).json({
+    return res.status(401).json({
       success: false,
       message: "invalid token",
     });

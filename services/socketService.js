@@ -58,3 +58,9 @@ export const emitToAll = (event, data) => {
     });
   }
 };
+
+export const joinStudentRoom = (nim) => {
+  if (io) {
+    console.log(nim);
+  }
+};
