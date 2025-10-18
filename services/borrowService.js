@@ -126,7 +126,18 @@ class BorrowService {
       }
 
       // 6. Create pending transaction
-      const returnDateTime = new Date(waktu_pengembalian_dijanjikan);
+      // Parse the datetime properly to handle timezone
+      // For Asia/Jakarta timezone (UTC+7), we need to adjust the datetime
+      let returnDateTime;
+      if (typeof waktu_pengembalian_dijanjikan === "string") {
+        // If it's an ISO string, parse it and adjust for timezone
+        const parsedDate = new Date(waktu_pengembalian_dijanjikan);
+        // Convert to Asia/Jakarta time by adding 7 hours (in milliseconds)
+        returnDateTime = new Date(parsedDate.getTime() + 7 * 60 * 60 * 1000);
+      } else {
+        returnDateTime = new Date(waktu_pengembalian_dijanjikan);
+      }
+
       const countdownExpiry = new Date();
       countdownExpiry.setMinutes(countdownExpiry.getMinutes() + 15);
 
@@ -145,6 +156,11 @@ class BorrowService {
       };
 
       // Insert with pending status - waiting for admin acceptance
+      // Format the datetime properly for MySQL
+      const mysqlDateTime = returnDateTime
+        .toISOString()
+        .slice(0, 19)
+        .replace("T", " ");
       const [transactionResult] = await connection.execute(
         `INSERT INTO transaksi
           (nim, nip, jadwal_id, id_barang, waktu_pengembalian_dijanjikan, status_peminjaman, notes_checkout, nama_prodi)
@@ -154,7 +170,7 @@ class BorrowService {
           borrowerNip,
           jadwal_id,
           id_barang,
-          returnDateTime.toISOString().slice(0, 19).replace("T", " "),
+          mysqlDateTime,
           JSON.stringify(requestMetadata),
           nama_prodi,
         ]

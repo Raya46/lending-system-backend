@@ -50,6 +50,32 @@ export async function validateBorrowEligibility(
       );
     }
 
+    // Validate that the schedule day matches today
+    const today = new Date();
+    const todayDayIndex = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+    const dayMap = {
+      Minggu: 0,
+      Senin: 1,
+      Selasa: 2,
+      Rabu: 3,
+      Kamis: 4,
+      Jumat: 5,
+      Sabtu: 6,
+    };
+
+    const scheduleDayIndex = dayMap[schedule.hari_dalam_seminggu];
+    if (scheduleDayIndex === undefined) {
+      throw new Error(
+        `Format hari jadwal tidak valid: ${schedule.hari_dalam_seminggu}`
+      );
+    }
+
+    if (scheduleDayIndex !== todayDayIndex) {
+      throw new Error(
+        `Jadwal ini untuk hari ${schedule.hari_dalam_seminggu}, bukan untuk hari ini. Peminjaman hanya bisa dilakukan pada hari yang sesuai dengan jadwal.`
+      );
+    }
+
     const returnDateTime = new Date(returnDate);
     const now = new Date();
 
@@ -124,6 +150,32 @@ export async function validateLecturerBorrowEligibility(
     if (lecturerProdi && schedule.nama_prodi !== lecturerProdi) {
       throw new Error(
         `Jadwal ini untuk program studi ${schedule.nama_prodi}, bukan untuk ${lecturerProdi}`
+      );
+    }
+
+    // Validate that the schedule day matches today
+    const today = new Date();
+    const todayDayIndex = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+    const dayMap = {
+      Minggu: 0,
+      Senin: 1,
+      Selasa: 2,
+      Rabu: 3,
+      Kamis: 4,
+      Jumat: 5,
+      Sabtu: 6,
+    };
+
+    const scheduleDayIndex = dayMap[schedule.hari_dalam_seminggu];
+    if (scheduleDayIndex === undefined) {
+      throw new Error(
+        `Format hari jadwal tidak valid: ${schedule.hari_dalam_seminggu}`
+      );
+    }
+
+    if (scheduleDayIndex !== todayDayIndex) {
+      throw new Error(
+        `Jadwal ini untuk hari ${schedule.hari_dalam_seminggu}, bukan untuk hari ini. Peminjaman hanya bisa dilakukan pada hari yang sesuai dengan jadwal.`
       );
     }
 
