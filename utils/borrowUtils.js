@@ -204,11 +204,21 @@ export async function autoRejectAllExpiredRequests() {
   try {
     await connection.beginTransaction();
 
-    // Find all expired pending transactions
+    // Find all expired pending transactions (for both students and lecturers)
     const [expiredTransactions] = await connection.execute(`
-      SELECT t.peminjaman_id, t.nim, t.notes_checkout, m.nama_mahasiswa
+      SELECT 
+        t.peminjaman_id, 
+        t.nim, 
+        t.nip,
+        t.notes_checkout, 
+        COALESCE(m.nama_mahasiswa, d.nama_dosen) as nama_peminjam,
+        CASE 
+          WHEN t.nim IS NOT NULL THEN 'student'
+          WHEN t.nip IS NOT NULL THEN 'lecturer'
+        END as borrower_type
       FROM transaksi t
-      JOIN mahasiswa m ON t.nim = m.nim
+      LEFT JOIN mahasiswa m ON t.nim = m.nim
+      LEFT JOIN dosen d ON t.nip = d.nip
       WHERE t.status_peminjaman = 'pending'
         AND t.waktu_pengembalian_dijanjikan <= NOW()
     `);
@@ -232,10 +242,11 @@ export async function autoRejectAllExpiredRequests() {
 
     await connection.commit();
 
-    // Notify students and admins
+    // Notify borrowers and admins (both students and lecturers)
     expiredTransactions.forEach((transaction) => {
       const metadata = JSON.parse(transaction.notes_checkout);
-      emitToStudent(transaction.nim, "borrow_auto_rejected", {
+      const borrowerIdentifier = transaction.nim || transaction.nip;
+      emitToStudent(borrowerIdentifier, "borrow_auto_rejected", {
         transaction_id: transaction.peminjaman_id,
         reason: "Tidak datang ke admin dalam waktu 15 menit",
         lecturer_name: metadata.lecturer_name,
@@ -267,19 +278,25 @@ export async function updateOverdueItems() {
   try {
     await connection.beginTransaction();
 
-    // Find items that are past due date and still marked as "dipinjam"
+    // Find items that are past due date and still marked as "dipinjam" (for both students and lecturers)
     const [overdueItems] = await connection.execute(
       `
       SELECT
         t.peminjaman_id,
         t.nim,
-        m.nama_mahasiswa,
+        t.nip,
+        COALESCE(m.nama_mahasiswa, d.nama_dosen) as nama_peminjam,
         i.barcode,
         i.tipe_nama_barang,
         t.waktu_pengembalian_dijanjikan,
-        TIMESTAMPDIFF(DAY, t.waktu_pengembalian_dijanjikan, NOW()) as days_overdue
+        TIMESTAMPDIFF(DAY, t.waktu_pengembalian_dijanjikan, NOW()) as days_overdue,
+        CASE 
+          WHEN t.nim IS NOT NULL THEN 'student'
+          WHEN t.nip IS NOT NULL THEN 'lecturer'
+        END as borrower_type
       FROM transaksi t
-      JOIN mahasiswa m ON t.nim = m.nim
+      LEFT JOIN mahasiswa m ON t.nim = m.nim
+      LEFT JOIN dosen d ON t.nip = d.nip
       JOIN inventory i ON t.id_barang = i.id_barang
       WHERE t.status_peminjaman = 'dipinjam'
         AND t.waktu_pengembalian_dijanjikan < NOW()
@@ -296,7 +313,7 @@ export async function updateOverdueItems() {
       `
       UPDATE transaksi
       SET status_peminjaman = 'terlambat',
-          notes_checkin = CONCAT(COALESCE(notes_checkin, ''), ' | Status otomatis: Belum dikembalikan (terlambat)')
+          notes_checkin = CONCAT(COALESCE(notes_checkin, ''), ' | Status otomatis: dikembalikan (terlambat)')
       WHERE peminjaman_id IN (${transactionIds.map(() => "?").join(",")})
     `,
       transactionIds
@@ -304,9 +321,10 @@ export async function updateOverdueItems() {
 
     await connection.commit();
 
-    // Notify students about overdue status
+    // Notify borrowers about overdue status (both students and lecturers)
     overdueItems.forEach((item) => {
-      emitToStudent(item.nim, "item_overdue", {
+      const borrowerIdentifier = item.nim || item.nip;
+      emitToStudent(borrowerIdentifier, "item_overdue", {
         transaction_id: item.peminjaman_id,
         item_name: item.tipe_nama_barang,
         days_overdue: item.days_overdue,
@@ -332,18 +350,122 @@ export async function updateOverdueItems() {
   }
 }
 
+// Auto-return items that have passed their return time
+export async function autoReturnOverdueItems() {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    // Find items that are past due date and still marked as "dipinjam" or "terlambat"
+    const [overdueItems] = await connection.execute(
+      `
+      SELECT
+        t.peminjaman_id,
+        t.nim,
+        t.nip,
+        t.id_barang,
+        COALESCE(m.nama_mahasiswa, d.nama_dosen) as nama_peminjam,
+        i.barcode,
+        i.tipe_nama_barang,
+        t.waktu_pengembalian_dijanjikan,
+        TIMESTAMPDIFF(DAY, t.waktu_pengembalian_dijanjikan, NOW()) as days_overdue,
+        CASE 
+          WHEN t.nim IS NOT NULL THEN 'student'
+          WHEN t.nip IS NOT NULL THEN 'lecturer'
+        END as borrower_type
+      FROM transaksi t
+      LEFT JOIN mahasiswa m ON t.nim = m.nim
+      LEFT JOIN dosen d ON t.nip = d.nip
+      JOIN inventory i ON t.id_barang = i.id_barang
+      WHERE t.status_peminjaman IN ('dipinjam', 'terlambat')
+        AND t.waktu_pengembalian_dijanjikan < NOW()
+    `
+    );
+
+    if (overdueItems.length === 0) {
+      return { returned_count: 0 };
+    }
+
+    // Update status to "dikembalikan" and update inventory status
+    const transactionIds = overdueItems.map((item) => item.peminjaman_id);
+    const itemIds = overdueItems.map((item) => item.id_barang);
+
+    // Update transactions
+    await connection.execute(
+      `
+      UPDATE transaksi
+      SET status_peminjaman = 'dikembalikan',
+          notes_checkin = CONCAT(COALESCE(notes_checkin, ''), ' | Pengembalian otomatis: Terlambat ', TIMESTAMPDIFF(DAY, waktu_pengembalian_dijanjikan, NOW()), ' hari'),
+          waktu_pengembalian_sebenarnya = NOW()
+      WHERE peminjaman_id IN (${transactionIds.map(() => "?").join(",")})
+    `,
+      transactionIds
+    );
+
+    // Update inventory status back to "tersedia"
+    if (itemIds.length > 0) {
+      await connection.execute(
+        `UPDATE inventory SET status = 'tersedia' WHERE id_barang IN (${itemIds
+          .map(() => "?")
+          .join(",")})`,
+        itemIds
+      );
+    }
+
+    await connection.commit();
+
+    // Notify borrowers about auto-return (both students and lecturers)
+    overdueItems.forEach((item) => {
+      const borrowerIdentifier = item.nim || item.nip;
+      emitToStudent(borrowerIdentifier, "item_auto_returned", {
+        transaction_id: item.peminjaman_id,
+        item_name: item.tipe_nama_barang,
+        days_overdue: item.days_overdue,
+        due_date: item.waktu_pengembalian_dijanjikan,
+        message: `Item ${item.tipe_nama_barang} telah dikembalikan secara otomatis karena terlambat ${item.days_overdue} hari`,
+      });
+    });
+
+    // Notify admins about auto-returns
+    emitToAdmins("items_auto_returned", {
+      count: overdueItems.length,
+      returned_items: overdueItems,
+    });
+
+    return {
+      returned_count: overdueItems.length,
+      returned_items: overdueItems,
+    };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 export async function autoRejectExpiredRequest(transactionId) {
   const connection = await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    // Check if transaction is still pending and expired
+    // Check if transaction is still pending and expired (for both students and lecturers)
     const [transactionData] = await connection.execute(
       `
-      SELECT t.nim, t.notes_checkout, m.nama_mahasiswa
+      SELECT 
+        t.nim, 
+        t.nip,
+        t.notes_checkout, 
+        COALESCE(m.nama_mahasiswa, d.nama_dosen) as nama_peminjam,
+        CASE 
+          WHEN t.nim IS NOT NULL THEN 'student'
+          WHEN t.nip IS NOT NULL THEN 'lecturer'
+        END as borrower_type
       FROM transaksi t
-      JOIN mahasiswa m ON t.nim = m.nim
+      LEFT JOIN mahasiswa m ON t.nim = m.nim
+      LEFT JOIN dosen d ON t.nip = d.nip
       WHERE t.peminjaman_id = ?
         AND t.status_peminjaman = 'pending'
         AND t.waktu_pengembalian_dijanjikan <= NOW()
@@ -372,8 +494,9 @@ export async function autoRejectExpiredRequest(transactionId) {
 
     await connection.commit();
 
-    // Notify student about auto-rejection
-    emitToStudent(transaction.nim, "borrow_auto_rejected", {
+    // Notify borrower about auto-rejection (both students and lecturers)
+    const borrowerIdentifier = transaction.nim || transaction.nip;
+    emitToStudent(borrowerIdentifier, "borrow_auto_rejected", {
       transaction_id: transactionId,
       reason: "Tidak datang ke admin dalam waktu 15 menit",
       lecturer_name: metadata.lecturer_name,
@@ -383,7 +506,8 @@ export async function autoRejectExpiredRequest(transactionId) {
     // Notify admins
     emitToAdmins("request_auto_rejected", {
       transaction_id: transactionId,
-      student_name: transaction.nama_mahasiswa,
+      borrower_name: transaction.nama_peminjam,
+      borrower_type: transaction.borrower_type,
       reason: "15 minute timeout",
     });
 
