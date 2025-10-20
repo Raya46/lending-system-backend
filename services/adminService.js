@@ -1,4 +1,5 @@
 import pool from "../data/db_setting.js";
+import { emitToAdmins, emitToStudent } from "./socketService.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import xlsx from "xlsx";
@@ -689,6 +690,190 @@ class AdminService {
     return rows;
   }
 
+  static async returnItemByBarcode(barcode, adminId) {
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      // Find the item by barcode that is currently borrowed
+      const [itemData] = await connection.execute(
+        `
+        SELECT
+          i.id_barang,
+          i.tipe_nama_barang,
+          i.barcode,
+          t.peminjaman_id,
+          t.nim,
+          t.nip,
+          t.waktu_checkout,
+          t.waktu_pengembalian_dijanjikan,
+          COALESCE(m.nama_mahasiswa, d.nama_dosen) as nama_peminjam
+        FROM inventory i
+        JOIN transaksi t ON i.id_barang = t.id_barang
+        LEFT JOIN mahasiswa m ON t.nim = m.nim
+        LEFT JOIN dosen d ON t.nip = d.nip
+        WHERE i.barcode = ?
+          AND t.status_peminjaman IN ('dipinjam', 'terlambat')
+        ORDER BY t.peminjaman_id DESC
+        LIMIT 1
+        `,
+        [barcode]
+      );
+
+      if (itemData.length === 0) {
+        throw new Error("Item not found or not currently borrowed");
+      }
+
+      const item = itemData[0];
+
+      // Update transaction status to returned
+      await connection.execute(
+        `
+        UPDATE transaksi
+        SET status_peminjaman = 'dikembalikan',
+            admin_id_checkin = ?,
+            waktu_pengembalian_sebenarnya = NOW(),
+            notes_checkin = 'Dikembalikan secara manual oleh admin'
+        WHERE peminjaman_id = ?
+        `,
+        [adminId, item.peminjaman_id]
+      );
+
+      // Update inventory status to available
+      await connection.execute(
+        `
+        UPDATE inventory
+        SET status = 'tersedia'
+        WHERE id_barang = ?
+        `,
+        [item.id_barang]
+      );
+
+      await connection.commit();
+
+      return {
+        success: true,
+        message: "Item returned successfully",
+        data: {
+          item_name: item.tipe_nama_barang,
+          barcode: item.barcode,
+          borrower_name: item.nama_peminjam,
+          return_time: new Date().toISOString(),
+        },
+      };
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  static async returnItem(transactionId, adminId, notes = "") {
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      // Get transaction details
+      const [transactionData] = await connection.execute(
+        `
+        SELECT t.*, i.barcode, i.tipe_nama_barang
+        FROM transaksi t
+        LEFT JOIN inventory i ON t.id_barang = i.id_barang
+        WHERE t.peminjaman_id = ? AND t.status_peminjaman IN ('dipinjam', 'terlambat')
+      `,
+        [transactionId]
+      );
+
+      if (transactionData.length === 0) {
+        throw new Error("Transaksi tidak ditemukan atau sudah dikembalikan");
+      }
+
+      const transaction = transactionData[0];
+
+      // Update transaction status
+      await connection.execute(
+        `
+        UPDATE transaksi
+        SET status_peminjaman = 'dikembalikan',
+            waktu_pengembalian_sebenarnya = NOW(),
+            admin_id_checkin = ?,
+            notes_checkin = ?
+        WHERE peminjaman_id = ?
+      `,
+        [adminId, notes || `Dikembalikan oleh admin`, transactionId]
+      );
+
+      // Update inventory status
+      if (transaction.id_barang) {
+        await connection.execute(
+          `
+          UPDATE inventory
+          SET status = 'tersedia'
+          WHERE id_barang = ?
+        `,
+          [transaction.id_barang]
+        );
+      }
+
+      await connection.commit();
+
+      // Get complete transaction data for notification
+      const [completeData] = await connection.execute(
+        `
+        SELECT
+          t.peminjaman_id,
+          t.nim,
+          t.nip,
+          COALESCE(m.nama_mahasiswa, d.nama_dosen) as nama_peminjam,
+          i.tipe_nama_barang,
+          i.barcode,
+          t.waktu_checkout,
+          t.waktu_pengembalian_dijanjikan,
+          t.waktu_pengembalian_sebenarnya,
+          t.notes_checkin
+        FROM transaksi t
+        LEFT JOIN inventory i ON t.id_barang = i.id_barang
+        LEFT JOIN mahasiswa m ON t.nim = m.nim
+        LEFT JOIN dosen d ON t.nip = d.nip
+        WHERE t.peminjaman_id = ?
+      `,
+        [transactionId]
+      );
+
+      const completeTransaction = completeData[0];
+      const borrowerIdentifier = transaction.nim || transaction.nip;
+
+      // Notify student/lecturer about return
+      emitToStudent(borrowerIdentifier, "item_returned", {
+        transaction_id: transactionId,
+        item_name: completeTransaction.tipe_nama_barang,
+        return_date: completeTransaction.waktu_pengembalian_sebenarnya,
+        notes: notes || "Dikembalikan oleh admin",
+      });
+
+      // Notify admins
+      emitToAdmins("item_returned", {
+        transaction_id: transactionId,
+        borrower_name: completeTransaction.nama_peminjam,
+        item_name: completeTransaction.tipe_nama_barang,
+        returned_by: adminId,
+      });
+
+      return {
+        success: true,
+        transaction: completeTransaction,
+      };
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   static async getClassDetails(prodiName) {
     const [prodiInfo] = await pool.execute(
       "SELECT * FROM prodi WHERE nama_prodi = ?",
@@ -719,17 +904,17 @@ class AdminService {
         m.nama_mahasiswa as student_name,
         m.nim,
         COUNT(t.peminjaman_id) as number_of_times_borrowing,
-        GROUP_CONCAT(
+        COALESCE(GROUP_CONCAT(
           CASE WHEN t.status_peminjaman = 'dikembalikan' THEN
-            CONCAT(i.tipe_nama_barang, ' - ', i.brand, ' ', i.model)
+            CONCAT(i.tipe_nama_barang, ' - ', COALESCE(i.brand, ''), ' ', COALESCE(i.model, ''))
           END SEPARATOR '; '
-        ) as returned_items,
-        GROUP_CONCAT(
+        ), '') as returned_items,
+        COALESCE(GROUP_CONCAT(
           CASE WHEN t.status_peminjaman IN ('dipinjam','terlambat') THEN
-            CONCAT(i.tipe_nama_barang, ' - ', i.brand, ' ', i.model)
+            CONCAT(i.tipe_nama_barang, ' - ', COALESCE(i.brand, ''), ' ', COALESCE(i.model, ''))
           END SEPARATOR '; '
-        ) as unreturned_items,
-         CASE 
+        ), '') as unreturned_items,
+         CASE
           WHEN COUNT(CASE WHEN t.status_peminjaman IN ('dipinjam', 'terlambat') THEN 1 END) > 0 THEN 'active_borrower'
           ELSE 'inactive_borrower'
         END as borrower_type,
@@ -745,7 +930,23 @@ class AdminService {
       [prodiName]
     );
 
-    const borrowersWithLoans = borrowers.filter(
+    // Process borrowers data to ensure all fields are properly formatted
+    const processedBorrowers = borrowers.map((borrower) => ({
+      ...borrower,
+      student_name: borrower.student_name || "Unknown",
+      nim: borrower.nim || "N/A",
+      number_of_times_borrowing:
+        parseInt(borrower.number_of_times_borrowing) || 0,
+      returned_items: borrower.returned_items || "No returned items",
+      unreturned_items: borrower.unreturned_items || "No active items",
+      borrower_type: borrower.borrower_type || "inactive_borrower",
+      last_borrow_time: borrower.last_borrow_time
+        ? new Date(borrower.last_borrow_time).toISOString()
+        : null,
+      active_loans: parseInt(borrower.active_loans) || 0,
+    }));
+
+    const borrowersWithLoans = processedBorrowers.filter(
       (b) => b.number_of_times_borrowing > 0
     );
     const totalBorrowers = borrowersWithLoans.length;
@@ -761,7 +962,7 @@ class AdminService {
         rooms: prodiInfo[0].room || scheduleInfo[0].rooms || "N/A",
         schedules: prodiInfo[0].schedule || scheduleInfo[0].schedules || "N/A",
       },
-      borrowers: borrowers,
+      borrowers: processedBorrowers,
       statistics: {
         total_borrowers: totalBorrowers,
         active_borrowers: activeBorrowers,

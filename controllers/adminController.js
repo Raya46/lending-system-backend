@@ -312,6 +312,64 @@ class AdminController {
     }
   }
 
+  static async returnItem(req, res) {
+    try {
+      const { barcode } = req.body;
+      const adminId = req.admin.admin_id;
+
+      if (!barcode) {
+        return res.status(400).json({
+          success: false,
+          message: "Barcode is required",
+        });
+      }
+
+      const result = await AdminService.returnItemByBarcode(barcode, adminId);
+
+      res.json({
+        success: true,
+        message: result.message,
+        data: result.data,
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
+  static async returnItemByTransaction(req, res) {
+    try {
+      const { transactionId, notes } = req.body;
+      const adminId = req.admin.admin_id;
+
+      if (!transactionId) {
+        return res.status(400).json({
+          success: false,
+          message: "Transaction ID is required",
+        });
+      }
+
+      const result = await AdminService.returnItem(
+        transactionId,
+        adminId,
+        notes
+      );
+
+      res.json({
+        success: true,
+        message: "Item returned successfully",
+        data: result.transaction,
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
   static async importMahasiswa(req, res) {
     try {
       if (!req.file) {

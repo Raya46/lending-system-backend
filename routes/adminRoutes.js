@@ -72,6 +72,12 @@ router.put(
   AdminController.updateMahasiswa
 );
 router.get("/classes/:id", authMiddleware, AdminController.getClassDetails);
+router.post("/return-item", authMiddleware, AdminController.returnItem);
+router.post(
+  "/return-item-by-transaction",
+  authMiddleware,
+  AdminController.returnItemByTransaction
+);
 
 // public routes
 router.get("/classes", AdminController.getAllClasses);
